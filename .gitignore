@@ -12,3 +12,6 @@ data/
 
 # OS
 .DS_Store
+
+# Claude Code personal settings (local paths, permissions)
+.claude/settings.local.json
