@@ -12,7 +12,12 @@ this runner's logic.
 Must only run after the US market has fully closed -- see docs/architecture.md
 "Deployment" (yfinance can return a non-final price for the current day
 while the market is open, and dropna() does not catch that: it's only NaN
-rows, not intraday-and-therefore-not-yet-final ones, that get dropped).
+rows, not intraday-and-therefore-not-yet-final ones, that get dropped). A
+real (non-dry-run) invocation during NYSE regular hours is refused outright
+(see `_refuse_if_market_open`) rather than relying solely on the
+scheduler's own timing -- it fails closed, as a backstop against e.g. a
+manual run (GitHub Actions' `workflow_dispatch`) triggered at the wrong
+time of day.
 
 Usage:
     python -m src.main --config ../drawdown-watcher-private/config/config.yaml
@@ -22,7 +27,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -46,6 +53,26 @@ STALE_AFTER_DAYS = 5
 # not-yet-final row from yesterday's refresh getting replaced); a bigger drop
 # than that suggests the data source handed back a truncated history.
 ROW_COUNT_DROP_TOLERANCE = 5
+
+_NYSE_OPEN = time(9, 30)
+_NYSE_CLOSE = time(16, 0)
+
+
+def _refuse_if_market_open(now: datetime | None = None) -> None:
+    """Raises if `now` (default: actual current time) falls within NYSE
+    regular hours -- an event computed from a non-final intraday price
+    would be emailed and recorded as already-sent, with no way to retract
+    it once the real close comes in (see docs/architecture.md
+    "Deployment"). A coarse weekday + hours check, not a full holiday
+    calendar: refusing on a market holiday afternoon is a harmless false
+    positive, not a risk -- it fails closed either way. `now` is a seam for
+    tests; production code always calls this with no argument."""
+    now = now or datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() < 5 and _NYSE_OPEN <= now.time() < _NYSE_CLOSE:
+        raise RuntimeError(
+            f"refusing to run during NYSE hours ({now.strftime('%H:%M %Z')}) -- "
+            'see docs/architecture.md "Deployment"'
+        )
 
 
 def process_ticker(
@@ -141,6 +168,8 @@ def main() -> None:
     try:
         tickers_cfg = load_config(config_path)
         state = load_state(state_path)
+        if not args.dry_run:
+            _refuse_if_market_open()
     except Exception as exc:  # noqa: BLE001 -- a startup failure must still be reported
         print(f"ERROR  startup: {exc}", file=sys.stderr)
         if not args.dry_run:

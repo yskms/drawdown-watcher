@@ -1,4 +1,6 @@
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -189,6 +191,9 @@ def test_main_saves_state_even_when_every_ticker_fails(tmp_path, monkeypatch):
     heartbeat_calls = []
     monkeypatch.setattr(main_module, "notify_error", lambda ticker, msg: error_calls.append((ticker, msg)))
     monkeypatch.setattr(main_module, "notify_heartbeat", lambda lines: heartbeat_calls.append(lines))
+    # Not under test here -- see test_refuse_if_market_open_* and
+    # test_main_* below for the guard itself.
+    monkeypatch.setattr(main_module, "_refuse_if_market_open", lambda: None)
     monkeypatch.setattr("sys.argv", ["main.py", "--state", str(state_path)])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -215,6 +220,9 @@ def test_main_notifies_event_after_a_quiet_run_round_trip(tmp_path, monkeypatch)
     monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: quiet_close)
     monkeypatch.setattr(main_module, "notify_heartbeat", lambda lines: None)
     monkeypatch.setattr(main_module, "notify_error", lambda ticker, msg: None)
+    # Not under test here -- see test_refuse_if_market_open_* and
+    # test_main_* below for the guard itself.
+    monkeypatch.setattr(main_module, "_refuse_if_market_open", lambda: None)
     monkeypatch.setattr("sys.argv", ["main.py", "--state", str(state_path)])
 
     main_module.main()  # a quiet run -- establishes SPXL in state with zero keys
@@ -236,6 +244,9 @@ def test_main_notifies_error_on_startup_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "load_config", lambda path: (_ for _ in ()).throw(ValueError("bad yaml")))
     error_calls = []
     monkeypatch.setattr(main_module, "notify_error", lambda ticker, msg: error_calls.append((ticker, msg)))
+    # Not under test here -- see test_refuse_if_market_open_* and
+    # test_main_* below for the guard itself.
+    monkeypatch.setattr(main_module, "_refuse_if_market_open", lambda: None)
     monkeypatch.setattr("sys.argv", ["main.py", "--state", str(tmp_path / "state.json")])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -245,3 +256,57 @@ def test_main_notifies_error_on_startup_failure(monkeypatch, tmp_path):
     assert len(error_calls) == 1
     assert error_calls[0][0] is None
     assert "bad yaml" in error_calls[0][1]
+
+
+def test_refuse_if_market_open_raises_during_regular_hours():
+    a_thursday_noon = datetime(2026, 10, 1, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    with pytest.raises(RuntimeError, match="NYSE hours"):
+        main_module._refuse_if_market_open(a_thursday_noon)
+
+
+def test_refuse_if_market_open_allows_evening():
+    a_thursday_evening = datetime(2026, 10, 1, 20, 0, tzinfo=ZoneInfo("America/New_York"))
+    main_module._refuse_if_market_open(a_thursday_evening)  # does not raise
+
+
+def test_refuse_if_market_open_allows_weekend_even_at_noon():
+    a_saturday_noon = datetime(2026, 10, 3, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+    main_module._refuse_if_market_open(a_saturday_noon)  # does not raise
+
+
+def test_refuse_if_market_open_is_exclusive_of_the_close():
+    exactly_at_close = datetime(2026, 10, 1, 16, 0, tzinfo=ZoneInfo("America/New_York"))
+    main_module._refuse_if_market_open(exactly_at_close)  # 16:00 itself is already closed
+
+
+def test_main_refuses_to_run_and_notifies_error_when_market_is_open(monkeypatch, tmp_path):
+    monkeypatch.setattr(main_module, "load_config", lambda path: {"SPXL": _CFG})
+    monkeypatch.setattr(
+        main_module, "_refuse_if_market_open",
+        lambda: (_ for _ in ()).throw(RuntimeError("refusing to run during NYSE hours (12:00 EDT)")),
+    )
+    error_calls = []
+    monkeypatch.setattr(main_module, "notify_error", lambda ticker, msg: error_calls.append((ticker, msg)))
+    monkeypatch.setattr("sys.argv", ["main.py", "--state", str(tmp_path / "state.json")])
+
+    with pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    assert len(error_calls) == 1
+    assert error_calls[0][0] is None
+    assert "NYSE hours" in error_calls[0][1]
+
+
+def test_main_dry_run_never_checks_market_hours(monkeypatch, tmp_path):
+    # dry-run sends no email and saves no state, so running it during market
+    # hours is harmless -- the guard must not even be consulted.
+    monkeypatch.setattr(main_module, "load_config", lambda path: {"SPXL": _CFG})
+    monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: _close_series(last_price=100.0, days=400))
+    checked = []
+    monkeypatch.setattr(main_module, "_refuse_if_market_open", lambda: checked.append(True))
+    monkeypatch.setattr("sys.argv", ["main.py", "--state", str(tmp_path / "state.json"), "--dry-run"])
+
+    main_module.main()
+
+    assert checked == []
