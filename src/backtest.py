@@ -2,7 +2,7 @@
 and reports when Drawdown Watcher would have historically fired.
 
 Usage:
-    python -m src.backtest [--config config/config.example.yaml] [--refresh]
+    python -m src.backtest [--config config/config.example.yaml] [--refresh] [--synthetic]
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import yaml
 from src.drawdown import all_time_high, rolling_high
 from src.market_data import fetch_history
 from src.state_machine import TickerConfig, run
+from src.synthetic import synthetic_history
 
 
 def load_config(path: Path) -> dict:
@@ -29,7 +30,17 @@ def ticker_config(cfg: dict) -> TickerConfig:
         levels=cfg["levels"],
         recovery_threshold=cfg["recovery_threshold"],
         recovery_confirm_days=cfg["recovery_confirm_days"],
+        hold_until_multiple=cfg.get("hold_until_multiple", 2.0),
+        trail_from_peak=cfg.get("trail_from_peak"),
     )
+
+
+def load_close(ticker: str, refresh: bool = False, synthetic: bool = False) -> pd.Series:
+    """Daily closes, with missing values dropped -- a NaN close silently
+    compares false everywhere in the state machine instead of failing."""
+    if synthetic:
+        return synthetic_history(ticker)
+    return fetch_history(ticker, refresh=refresh).dropna()
 
 
 def format_event(e: dict) -> str:
@@ -62,6 +73,18 @@ def format_event(e: dict) -> str:
             f"{date}  RENEWED DECLINE       close={e['close']:.2f}  "
             f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%  "
             f"streak={e['streak_trading_days']}d"
+        )
+    if e["event"] == "UPTREND_ARMED":
+        return (
+            f"{date}  UPTREND ARMED         close={e['close']:.2f}  "
+            f"x{e['multiple']:.1f} from bottom call {e['base_close']:.2f} "
+            f"on {e['base_date'].date()}  sell_line={e['sell_line']:.2f}"
+        )
+    if e["event"] == "UPTREND_EXIT":
+        return (
+            f"{date}  UPTREND EXIT ({e['reason']:<8}) close={e['close']:.2f}  "
+            f"x{e['multiple']:.1f} from bottom call {e['base_close']:.2f}  "
+            f"peak={e['peak']:.2f} on {e['peak_date'].date()}"
         )
     if e["event"] == "NORMAL_RESUME":
         return (
@@ -113,12 +136,16 @@ def main() -> None:
     parser.add_argument(
         "--refresh", action="store_true", help="ignore data/ cache and refetch"
     )
+    parser.add_argument(
+        "--synthetic", action="store_true",
+        help="use the synthetic long history built from each ticker's underlying index",
+    )
     args = parser.parse_args()
 
     tickers_cfg = load_config(Path(args.config))
 
     for ticker, cfg in tickers_cfg.items():
-        close = fetch_history(ticker, refresh=args.refresh)
+        close = load_close(ticker, refresh=args.refresh, synthetic=args.synthetic)
         summarize_ticker(ticker, close, cfg)
 
 

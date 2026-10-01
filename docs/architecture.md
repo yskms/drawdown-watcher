@@ -16,7 +16,8 @@ Drawdown Engine (state_machine.run, replayed from scratch)
     ├── 52-week high
     ├── Reference high (lock)
     ├── Drawdown / level checks
-    └── Recovery confirm / undercut
+    ├── Recovery confirm / undercut
+    └── Uptrend tracking after a bottom call (hold / sell line)
     │
     ▼
 Diff against "already notified" cursor
@@ -37,7 +38,10 @@ low-cost, close-to-zero-maintenance operation, not low latency.
   / LEVEL_TRIGGER / RECOVERY_CONFIRMED / RECOVERY_UNDERCUT / RENEWED_DECLINE
   / NORMAL_RESUME), replayed over a full price series. There is no
   separate "RECOVERY" mode — confirming or undercutting a recovery is
-  tracked as a sub-state within DRAWDOWN (see docs/strategy.md).
+  tracked as a sub-state within DRAWDOWN (see docs/strategy.md). On top
+  of that, `track_uptrend` follows each bottom call's rebound
+  (UPTREND_ARMED / UPTREND_EXIT) independently of those modes, since a
+  worthwhile uptrend runs well past NORMAL_RESUME.
 - `notifier.py` — sends a notification per new event, plus errors and
   periodic heartbeats.
 - `backtest.py` — runs the state machine against each configured ticker's
@@ -46,6 +50,13 @@ low-cost, close-to-zero-maintenance operation, not low latency.
   values to show how often Drawdown Mode would have fired historically,
   and prints the recovery timeline for a chosen threshold. Used to tune
   per-ticker values (see docs/strategy.md).
+- `exit_sweep.py` — a tuning aid for the uptrend exit: compounds each
+  bottom-call-to-exit round trip under several `trail_from_peak` values,
+  next to "sell at 2x" and "never sell" baselines.
+- `synthetic.py` — builds a long synthetic history for a leveraged ETF from
+  its underlying index (leverage, borrowing cost, expense ratio), so the
+  tuning tools can be run with `--synthetic` against decades the ETF
+  itself never traded through.
 
 Backtesting and live monitoring call the exact same `state_machine.run` —
 only the data source and what happens with the resulting events (print vs.
@@ -68,6 +79,11 @@ post-split close. Recomputing from the freshly-fetched (correctly
 adjusted) series every time sidesteps this entirely: there's no stale
 locked value to go stale. The ~4,500 rows of daily data per ticker make
 full replay cheap enough that this costs nothing meaningful.
+
+Rows with a missing close are dropped before replay (`load_close`). A NaN
+close compares false against every threshold, so instead of failing it
+would silently skip that day's checks — and data fetched during trading
+hours can end in exactly such a not-yet-final row.
 
 ## State (per ticker)
 
@@ -109,7 +125,13 @@ One per new event out of `state_machine.run`, plus:
 - Error (data fetch / job failure)
 - Heartbeat (periodic, confirms the system is still alive — expected to
   otherwise go silent for long stretches, so it's the main defense
-  against a silent failure going unnoticed for years)
+  against a silent failure going unnoticed for years). It also states
+  each ticker's current stage in concrete numbers — in Drawdown Mode, how
+  far down and the next level; while tracking an uptrend, whether it's
+  still in the hold-to-2x stage or armed, the peak and its date, the
+  current distance from it, and the sell line price. The user rarely
+  looks at the market, so "what was I supposed to do?" has to be
+  answerable from the latest message alone.
 
 ## Deployment
 

@@ -2,8 +2,13 @@
 #
 # How deep to set these depends on the ticker's volatility and on how often
 # you want to be notified. Tune them against history with
-# `python -m src.threshold_sweep <TICKER>` and keep your real config outside
-# this repo, passing it with `--config <path>`.
+# `python -m src.threshold_sweep <TICKER>` / `python -m src.exit_sweep <TICKER>`
+# (add --synthetic for long synthetic history) and keep your real config
+# outside this repo, passing it with `--config <path>`.
+#
+# hold_until_multiple / trail_from_peak: after a bottom call, hold until this
+# multiple of the bottom-call close, then flag a drop of trail_from_peak% from
+# the peak. Omit trail_from_peak to turn uptrend tracking off.
 
 tickers:
   SPXL:
@@ -14,6 +19,8 @@ tickers:
       - -60
     recovery_threshold: 15
     recovery_confirm_days: 10
+    hold_until_multiple: 2.0
+    trail_from_peak: -40
 
   VOO:
     watch_threshold: -10
@@ -23,3 +30,5 @@ tickers:
       - -25
     recovery_threshold: 15
     recovery_confirm_days: 10
+    hold_until_multiple: 2.0
+    trail_from_peak: -15

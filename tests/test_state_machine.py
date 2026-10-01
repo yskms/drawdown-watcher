@@ -140,3 +140,84 @@ def test_normal_resume_on_reference_high_regained():
     assert resume["event"] == "NORMAL_RESUME"
     assert resume["close"] == 100
     assert resume["lowest_close"] == 60
+
+
+def _uptrend_config(**overrides) -> TickerConfig:
+    defaults = dict(
+        watch_threshold=-20,
+        levels=[],
+        recovery_threshold=10,
+        recovery_confirm_days=2,
+        hold_until_multiple=2.0,
+        trail_from_peak=-30,
+    )
+    defaults.update(overrides)
+    return TickerConfig(**defaults)
+
+
+def test_uptrend_tracking_is_off_without_trail_from_peak():
+    close = _series([100, 100, 50, 50, 60, 120, 200, 100])
+    config = _uptrend_config(trail_from_peak=None)
+
+    events = run(close, _ref(close), config)
+
+    assert not any(e["event"].startswith("UPTREND") for e in events)
+    assert not any(e.get("starts_uptrend") for e in events)
+
+
+def test_uptrend_arms_at_multiple_then_exits_on_trail_past_normal_resume():
+    # Bottom call at 60 (index 4). 2x = 120 arms it at index 5, still below
+    # the episode's reference high (200) -- tracking must carry on through
+    # NORMAL_RESUME (index 7) and only exit on a 30% drop from the 300 peak.
+    close = _series([200, 200, 50, 50, 60, 120, 150, 200, 300, 250, 209, 200])
+    config = _uptrend_config()
+
+    events = run(close, _ref(close), config)
+    kinds = [(e["date"], e["event"]) for e in events]
+
+    confirm = next(e for e in events if e["event"] == "RECOVERY_CONFIRMED")
+    assert confirm["date"] == close.index[4]
+    assert confirm["starts_uptrend"] is True
+
+    assert (close.index[5], "UPTREND_ARMED") in kinds
+    assert (close.index[7], "NORMAL_RESUME") in kinds
+
+    exit_event = next(e for e in events if e["event"] == "UPTREND_EXIT")
+    assert exit_event["date"] == close.index[10]  # 209 <= 300 * 0.7 = 210
+    assert exit_event["reason"] == "trail"
+    assert exit_event["peak"] == 300
+    assert exit_event["multiple"] == pytest.approx(209 / 60)
+
+
+def test_uptrend_holds_through_dips_before_arming():
+    # Falls 30%+ from its post-call peak (90 -> 62) before ever reaching 2x,
+    # but never undercuts the confirmed low (50): no exit yet.
+    close = _series([200, 200, 50, 50, 60, 90, 62, 62, 130])
+    config = _uptrend_config()
+
+    events = run(close, _ref(close), config)
+    kinds = [e["event"] for e in events]
+
+    assert "UPTREND_EXIT" not in kinds
+    assert kinds.count("UPTREND_ARMED") == 1
+
+
+def test_undercut_before_arming_exits_and_next_bottom_call_restarts():
+    # Bottom call at 60 off low 50 (index 4); undercut at 45 (index 5) ends
+    # tracking; the next bottom call (index 7, off low 45) starts a new one.
+    close = _series([200, 200, 50, 50, 60, 45, 45, 55, 110])
+    config = _uptrend_config()
+
+    events = run(close, _ref(close), config)
+
+    exit_event = next(e for e in events if e["event"] == "UPTREND_EXIT")
+    assert exit_event["date"] == close.index[5]
+    assert exit_event["reason"] == "undercut"
+    assert exit_event["base_close"] == 60
+
+    starts = [e for e in events if e.get("starts_uptrend")]
+    assert [e["date"] for e in starts] == [close.index[4], close.index[7]]
+
+    armed = next(e for e in events if e["event"] == "UPTREND_ARMED")
+    assert armed["date"] == close.index[8]
+    assert armed["base_close"] == 55

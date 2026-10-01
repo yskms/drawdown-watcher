@@ -14,7 +14,7 @@ that were decided in advance, during calm markets — not in the middle of
 a panic.
 
 The person using this doesn't watch the market day to day, so the whole
-point is to be told when it's worth paying attention. That's three
+point is to be told when it's worth paying attention. That's four
 distinct things, not one:
 
 1. **Pay attention** — a real drawdown has started (`DRAWDOWN_MODE_ENTER`,
@@ -22,7 +22,12 @@ distinct things, not one:
 2. **Maybe getting interesting** — it's reached a deeper configured level
    (`LEVEL_TRIGGER`) — informational, no action implied.
 3. **It bottomed** — a confirmed rebound off the low (`RECOVERY_CONFIRMED`)
-   — the one signal meant to prompt actually doing something.
+   — the signal meant to prompt buying.
+4. **Keep holding / the uptrend looks over** — after a bottom call, the
+   rebound is followed until it has clearly run its course
+   (`UPTREND_ARMED`, `UPTREND_EXIT`; see "After the bottom", below) — the
+   signal meant to prompt selling, and just as importantly, *not* selling
+   before then.
 
 Catching the exact bottom is explicitly not a goal of (3) — reacting
 10-20% off the low is completely fine. What matters is that (3) is
@@ -94,10 +99,14 @@ Some cautions when tuning:
 - Each ticker only has a handful of qualifying crashes in its history, so
   it's easy to overfit to them. Check that nudging a threshold by a few
   points doesn't change which crashes get caught.
-- Leveraged ETFs have short histories (most launched after 2008).
-  `src/threshold_sweep.py` only covers each ETF's own trading history; a
-  synthetic 3x-daily-rebalanced series built from the underlying index
-  would be needed to also cover 2000 or the full 2008 crash.
+- Leveraged ETFs have short histories (most launched after 2008), and the
+  years since then were an unusually strong bull market. `--synthetic`
+  (on `src/backtest.py`, `src/threshold_sweep.py` and `src/exit_sweep.py`)
+  replays a 3x-daily-rebalanced series built from the underlying index
+  instead (`src/synthetic.py`; back to 1960 for the S&P 500), covering
+  1973-74, 1987, 2000-2002, the full 2008 crash, and long sideways markets.
+  Check both: a rule that only works on the ETF's own history is fitted to
+  one bull market.
 - Thresholds live in config, so they can be re-tuned later against fresh
   data without a code change.
 
@@ -215,8 +224,71 @@ but it's exactly the failure mode that would otherwise hit a
 crash-rebound-crash year like 2008, which is precisely the kind of market
 this is meant to catch.
 
+## After the bottom: holding the uptrend
+
+A bottom call is only half of it. The other common mistake is selling a
+good entry far too early — buying near the low, selling at 2x, and
+watching it go on to 5x. For someone who rarely looks at the market,
+there's a second problem: opening the brokerage account months later, it's
+hard to even reconstruct the rule — where was the peak, how far was it
+supposed to be allowed to fall?
+
+So after a bottom call, the tool keeps following the rebound and states
+the rule in concrete numbers. Tracking starts at the `RECOVERY_CONFIRMED`
+close (the "base"; the actual purchase price isn't needed, so no personal
+position data is involved), and works in two stages:
+
+1. **Hold until `hold_until_multiple` (2x) of the base.** No price-based
+   exit at all before that: a young uptrend is as choppy as a bottom, and
+   any trailing exit armed this early gets shaken out repeatedly.
+   Reaching 2x fires `UPTREND_ARMED` — deliberately at the point where the
+   urge to take the profit is strongest, as "from here on, the rule is:
+   hold until it falls `trail_from_peak`% from its peak."
+2. **After that, exit on a `trail_from_peak`% drop from the highest close
+   since the base** (`UPTREND_EXIT`, reason `trail`) — "the uptrend looks
+   over." Never the top itself; giving back part of the gain is the price
+   of not being shaken out of the rest of it.
+
+One exception in stage 1: if the bottom call itself is revoked
+(`RECOVERY_UNDERCUT`) before 2x, tracking ends (`UPTREND_EXIT`, reason
+`undercut`) — the premise for holding is gone. The next bottom call starts
+a new round.
+
+Tracking is independent of Drawdown Mode: a worthwhile uptrend usually
+runs far past the episode's original reference high (`NORMAL_RESUME`),
+and keeps being followed past it.
+
+What backtesting showed, comparing exit rules by compounding each round
+trip from bottom call to exit (cash in between):
+
+- **Selling early costs the most.** A shallow trailing exit from the start
+  did worse than simply selling at 2x, and far worse than holding longer —
+  it gets shaken out in the choppy early phase and in grinding bear
+  markets.
+- **Holding to 2x before arming the trailing exit** removed most of that
+  churn, and on leveraged ETFs beat both selling at 2x and a plain
+  trailing exit.
+- **But "hold to 2x no matter what" is catastrophic over long history.**
+  On the ETFs' own (post-2008) history it looked best of all; on synthetic
+  history, a bottom call made during 2000-2002 was held all the way down
+  — for decades, or to near zero for a semiconductor 3x fund — waiting for
+  a 2x that never came. Exiting when the bottom call is revoked fixes this
+  at the cost of small, bounded losses (typically -10 to -30%) on false
+  bottom calls, which can come several in a row in a bad year (2008).
+- Results are sensitive to the exact `trail_from_peak`, since each ticker
+  only has a handful of full cycles. Treat it as a rough range, and check
+  it against both the real and the synthetic history.
+
+Between notifications, the periodic heartbeat states where each tracked
+ticker stands — e.g. "holding, armed at 2x; peak $245.10 (2026-08-14),
+now -9.7% from it; sell line $171.57, 22.5% further down" — so the answer
+to "what was I supposed to do?" is always in the latest message, not in
+memory.
+
 ## What this is not
 
 - Not a crash predictor.
-- Not a buy/sell signal generator or position sizer.
+- Not investment advice or a position sizer. Every signal is a rule its
+  user configured in advance; the tool only applies it and states it in
+  concrete numbers.
 - Not tied to any specific ticker — thresholds are configuration, not code.

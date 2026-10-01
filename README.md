@@ -7,9 +7,10 @@ predefined thresholds are reached.
 
 Drawdown Watcher tracks the 52-week closing high of each ticker. When a
 configured drawdown threshold is reached, it locks the reference high and
-monitors deeper drawdown levels and a confirmed recovery off the low. It's
+monitors deeper drawdown levels and a confirmed recovery off the low —
+then follows the rebound, so a good entry isn't sold too early. It's
 built for someone who doesn't watch the market day to day, so it only
-speaks up at three points:
+speaks up at a few points:
 
 ```text
 NORMAL
@@ -19,9 +20,15 @@ NORMAL
 2. "Maybe getting interesting" LEVEL 1 / 2 / 3
   ↓ rebound off the low holds
 3. "It bottomed"              RECOVERY CONFIRMED (revoked if a new low follows)
-  ↓ original reference high regained
-NORMAL
+  ↓ 2x from the bottom call
+4. "Keep holding"             UPTREND ARMED (sell line: N% below the peak)
+  ↓ falls N% from its peak
+   "The uptrend looks over"   UPTREND EXIT
 ```
+
+The periodic heartbeat states each ticker's current stage in concrete
+numbers (peak, sell line, distance to it), so the rule never has to be
+remembered.
 
 Example tickers:
 
@@ -48,7 +55,9 @@ per ticker, since volatility differs a lot between, say, a 3x leveraged ETF
 and a broad index fund. See
 [config/config.example.yaml](config/config.example.yaml) for the format —
 its values are illustrative, not recommendations. Tune your own with
-`python -m src.threshold_sweep <TICKER>` and keep the real config outside
+`python -m src.threshold_sweep <TICKER>` and `python -m src.exit_sweep
+<TICKER>` (add `--synthetic` to test against decades of synthetic history
+built from the underlying index), and keep the real config outside
 this repo:
 
 ```sh

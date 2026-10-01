@@ -15,6 +15,13 @@
   意図的な設計。詳細は[docs/architecture.md](docs/architecture.md)の
   「Statelessness and stock splits」を参照。
 
+- 上昇の追跡（`track_uptrend`）は、「2倍までは何があっても持つ」ように見えるが、
+  2倍に届く前に`RECOVERY_UNDERCUT`が出たら降りる（`UPTREND_EXIT`、理由は`undercut`）。
+  この例外は消さないこと。消すと、長い下落相場（合成系列の2000〜2002年）で底打ちに
+  乗った分を数十年、または資金がほぼゼロになるまで持ち続ける。過去15年の実データでは
+  この問題が表に出ないため、必ず`--synthetic`でも確認する。詳細は
+  [docs/strategy.md](docs/strategy.md)の「After the bottom」を参照。
+
 ## 公開範囲
 
 - このリポジトリはpublic。実際に運用する銘柄別の閾値・その調整根拠（バックテストで得た
