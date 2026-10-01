@@ -3,15 +3,21 @@
 Credentials and the recipient address come from the environment (see
 .env.example), never from config -- config is meant to be shareable
 (config/config.example.yaml ships in the public repo), secrets aren't.
+
+Assumes STARTTLS on a plaintext-then-upgrade port (587) -- not implicit TLS
+(465, SMTP_SSL). Pick an STARTTLS-capable provider/port.
 """
 
 from __future__ import annotations
 
 import os
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 from src.event_format import format_event
+
+SMTP_TIMEOUT_SECONDS = 30
 
 
 class NotifierConfigError(RuntimeError):
@@ -30,7 +36,11 @@ def _send_email(subject: str, body: str) -> None:
     port = int(os.environ.get("SMTP_PORT", "587"))
     username = os.environ.get("SMTP_USERNAME")
     password = os.environ.get("SMTP_PASSWORD")
-    from_addr = os.environ.get("NOTIFICATION_EMAIL_FROM", username)
+    # `.get(key, default)` only falls back when the key is absent -- a
+    # `.env` copied from .env.example leaves NOTIFICATION_EMAIL_FROM= as an
+    # empty string, which *is* present, so `or` is required here to actually
+    # fall back to SMTP_USERNAME.
+    from_addr = os.environ.get("NOTIFICATION_EMAIL_FROM") or username
     to_addr = _env("NOTIFICATION_EMAIL_TO")
     if not from_addr:
         raise NotifierConfigError("NOTIFICATION_EMAIL_FROM or SMTP_USERNAME must be set")
@@ -41,8 +51,8 @@ def _send_email(subject: str, body: str) -> None:
     message["To"] = to_addr
     message.set_content(body)
 
-    with smtplib.SMTP(host, port) as smtp:
-        smtp.starttls()
+    with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
+        smtp.starttls(context=ssl.create_default_context())
         if username:
             smtp.login(username, password or "")
         smtp.send_message(message)
@@ -50,7 +60,7 @@ def _send_email(subject: str, body: str) -> None:
 
 def notify_event(ticker: str, event: dict) -> None:
     subject = f"[Drawdown Watcher] {ticker}: {event['event']}"
-    _send_email(subject, f"{ticker}\n\n{format_event(event)}")
+    _send_email(subject, f"{ticker}\n\n{format_event(event, show_streak=False)}")
 
 
 def notify_error(ticker: str | None, message: str) -> None:

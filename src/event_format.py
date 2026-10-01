@@ -4,19 +4,27 @@
 from __future__ import annotations
 
 
-def format_event(e: dict) -> str:
+def format_event(e: dict, *, show_streak: bool = True) -> str:
+    """`show_streak` defaults on for backtest.py, where `streak_trading_days`
+    (how many days the price stayed past the threshold) is meaningful because
+    the full future is already known. In production, the event being emailed
+    is always today's -- there is no future yet -- so it would always read
+    "streak=1d", a meaningless number dressed up as data; `notifier.py` turns
+    this off.
+    """
     date = e["date"].date()
     if e["event"] == "DRAWDOWN_MODE_ENTER":
+        streak = f"  streak={e['streak_trading_days']}d" if show_streak else ""
         return (
             f"{date}  DRAWDOWN MODE ENTER   close={e['close']:.2f}  "
-            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%  "
-            f"streak={e['streak_trading_days']}d"
+            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%{streak}"
         )
     if e["event"] == "LEVEL_TRIGGER":
+        streak = f"  streak={e['streak_trading_days']}d" if show_streak else ""
         return (
             f"{date}  LEVEL {e['level_index']} ({e['level']:.0f}%)     "
             f"close={e['close']:.2f}  ref_high={e['reference_high']:.2f}  "
-            f"drawdown={e['drawdown_pct']:.1f}%  streak={e['streak_trading_days']}d"
+            f"drawdown={e['drawdown_pct']:.1f}%{streak}"
         )
     if e["event"] == "RECOVERY_CONFIRMED":
         return (
@@ -30,10 +38,10 @@ def format_event(e: dict) -> str:
             f"broke back below confirmed low {e['confirmed_low']:.2f}"
         )
     if e["event"] == "RENEWED_DECLINE":
+        streak = f"  streak={e['streak_trading_days']}d" if show_streak else ""
         return (
             f"{date}  RENEWED DECLINE       close={e['close']:.2f}  "
-            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%  "
-            f"streak={e['streak_trading_days']}d"
+            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%{streak}"
         )
     if e["event"] == "UPTREND_ARMED":
         return (

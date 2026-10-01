@@ -1,3 +1,4 @@
+import ssl
 from unittest.mock import patch
 
 import pandas as pd
@@ -38,14 +39,26 @@ def test_notify_event_sends_email_with_ticker_and_event_details(mock_smtp, monke
     }
     notify_event("SPXL", event)
 
-    mock_smtp.assert_called_once_with("smtp.example.com", 587)
-    smtp_instance.starttls.assert_called_once()
+    mock_smtp.assert_called_once_with("smtp.example.com", 587, timeout=30)
     smtp_instance.login.assert_called_once_with("user@example.com", "secret")
     sent = smtp_instance.send_message.call_args[0][0]
     assert sent["To"] == "me@example.com"
     assert "SPXL" in sent["Subject"]
     assert "DRAWDOWN_MODE_ENTER" in sent["Subject"]
     assert "DRAWDOWN MODE ENTER" in sent.get_content()
+    assert "streak=" not in sent.get_content()  # always 1d in production -- see event_format.py
+
+
+@patch("src.notifier.smtplib.SMTP")
+def test_starttls_verifies_the_server_certificate(mock_smtp, monkeypatch):
+    _set_smtp_env(monkeypatch)
+    smtp_instance = mock_smtp.return_value.__enter__.return_value
+
+    notify_error(None, "boom")
+
+    (call_context,) = smtp_instance.starttls.call_args.kwargs.values()
+    assert call_context.verify_mode == ssl.CERT_REQUIRED
+    assert call_context.check_hostname is True
 
 
 @patch("src.notifier.smtplib.SMTP")
@@ -102,3 +115,17 @@ def test_missing_from_address_raises(monkeypatch):
 
     with pytest.raises(NotifierConfigError):
         notify_error(None, "boom")
+
+
+@patch("src.notifier.smtplib.SMTP")
+def test_empty_from_address_falls_back_to_username(mock_smtp, monkeypatch):
+    # .env copied from .env.example leaves NOTIFICATION_EMAIL_FROM= as an
+    # empty string, not unset -- os.environ.get(key, default) would not
+    # fall back to SMTP_USERNAME in that case (the key is present).
+    _set_smtp_env(monkeypatch, NOTIFICATION_EMAIL_FROM="")
+    smtp_instance = mock_smtp.return_value.__enter__.return_value
+
+    notify_error(None, "boom")
+
+    sent = smtp_instance.send_message.call_args[0][0]
+    assert sent["From"] == "user@example.com"
