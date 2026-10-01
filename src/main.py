@@ -56,9 +56,11 @@ ROW_COUNT_DROP_TOLERANCE = 5
 
 _NYSE_OPEN = time(9, 30)
 # Not the literal 16:00 close -- the close itself isn't necessarily final
-# the moment the bell rings (settlement/reporting lag), so this leaves the
-# same couple of hours' margin the production schedule itself relies on
-# (see docs/architecture.md "Deployment").
+# the moment the bell rings (settlement/reporting lag). A couple of hours'
+# margin, smaller than (and within) the 3-4h margin the production
+# schedule itself runs on (see docs/architecture.md "Deployment") --
+# this only needs to cover the close's own finalization lag, not match
+# the schedule's own, more generous, timing.
 _SAFE_TO_RUN_FROM = time(18, 0)
 
 
