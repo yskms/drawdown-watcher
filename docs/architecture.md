@@ -164,9 +164,13 @@ event out of `state_machine.run`, plus:
   open — revisit once Phase 4 scheduling is decided, since the scheduler
   could just as easily control the frequency from outside `main.py`.
 
-A ticker's very first run (or one recovering from a lost state file) seeds
+A ticker's very first run (identified by its absence from `state` --
+*never* by an empty key set, which is the ordinary case for a quiet ticker
+and must not be confused with "never seen before"; see `save_state`) seeds
 whatever's within the notification window as already-known instead of
-emailing it, since none of it just happened today (see
+emailing it, except for anything dated today, which is sent regardless --
+otherwise a live event on the very day state was lost would be silently
+swallowed into history along with the genuinely old ones (see
 `src/notification_state.py`, `src/main.py` `process_ticker`).
 
 ## Deployment
