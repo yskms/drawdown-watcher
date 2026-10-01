@@ -175,24 +175,38 @@ swallowed into history along with the genuinely old ones (see
 
 ## Deployment
 
-A cloud scheduler running once a day, **well after the US market closes**
-(target undecided as of Phase 3 — e.g. AWS EventBridge + Lambda, or a
-scheduled GitHub Actions workflow in the private repo). This margin isn't
-optional: during market hours, yfinance can return a non-final price for
-the current day that isn't NaN, so `dropna()` (see "Statelessness and stock
-splits") does not protect against running too early — an event computed
-from an intraday price would be notified and recorded as already-sent,
-with no way to retract it once the real close comes in lower or higher.
+A GitHub Actions workflow in the private repo, on a `schedule` cron timed
+**well after the US market closes**. This margin isn't optional: during
+market hours, yfinance can return a non-final price for the current day
+that isn't NaN, so `dropna()` (see "Statelessness and stock splits") does
+not protect against running too early — an event computed from an
+intraday price would be notified and recorded as already-sent, with no
+way to retract it once the real close comes in lower or higher.
 
-Secrets (SMTP credentials, API keys) are injected via environment
-variables / a secrets manager, never committed — see
-[.env.example](../.env.example). Two more things depend on the deployment
-target, beyond secrets:
+Each run checks out this repo fresh (tracking `main`) alongside the
+private repo, which holds the real `--config` and `--state` files,
+installs dependencies, and runs `src/main.py`. Because the checkout is
+fresh every time, there's no read-only-filesystem concern for
+`market_data.py`'s price cache (`data/`) the way there would be on
+something like Lambda — it's written to the disposable runner and
+discarded once the job ends.
 
-- Where `main.py`'s `--config`/`--state` paths resolve to (a local file,
-  S3, SSM, …).
-- Where `market_data.py`'s price cache (`data/`) is writable from — it
-  writes on every refresh, which a read-only runtime (e.g. Lambda's
-  deployment package) won't allow; `DATA_DIR` would need to become
-  configurable (e.g. to `/tmp`, which Lambda does provide, non-persistent)
-  rather than the hardcoded repo-relative path it is today.
+`--state` has no durable storage of its own to write to, so the updated
+state file is committed and pushed back to the private repo after each
+run (skipped when nothing changed) — see the private repo's
+`docs/deployment.md` for the workflow itself and the secrets it needs.
+This keeps the state file's history auditable like any other commit, at
+the cost of one bot commit per active day, and it means a merge to this
+repo's `main` takes effect on the very next scheduled run — there's no
+separate release step.
+
+Secrets (SMTP credentials) are injected via environment variables from
+GitHub Actions repo secrets, never committed — see
+[.env.example](../.env.example).
+
+One risk this doesn't cover: if the scheduler itself stops running (the
+workflow gets disabled, or GitHub has an outage), neither the heartbeat
+nor an error email follows — the heartbeat is a dead man's switch that
+depends on the switch's own clock still being wound. An external watchdog
+(e.g. healthchecks.io, pinged at the end of a successful run) would close
+that gap; not in place yet.
