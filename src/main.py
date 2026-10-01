@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 from src.config import load_config, ticker_config
 from src.drawdown import rolling_high
 from src.event_format import format_event
-from src.market_data import cache_path, fetch_history
+from src.market_data import fetch_history
 from src.notification_state import event_key, load_state, save_state, select_new_events
 from src.notifier import notify_error, notify_event, notify_heartbeat
 from src.state_machine import run
@@ -47,14 +47,6 @@ STALE_AFTER_DAYS = 5
 ROW_COUNT_DROP_TOLERANCE = 5
 
 
-def _cached_row_count(ticker: str) -> int | None:
-    path = cache_path(ticker)
-    if not path.exists():
-        return None
-    with open(path) as f:
-        return sum(1 for _ in f) - 1  # minus header
-
-
 def process_ticker(
     ticker: str, cfg: dict, state: dict, dry_run: bool
 ) -> tuple[str, pd.Timestamp, list[dict], list[dict]]:
@@ -62,8 +54,6 @@ def process_ticker(
     Returns (heartbeat status line, latest trading date, events notified or
     that would be notified this run, events seeded silently -- see below)."""
     config = ticker_config(cfg)
-
-    previous_rows = _cached_row_count(ticker)
     close = fetch_history(ticker, refresh=True).dropna()
     today = close.index[-1]
 
@@ -72,28 +62,50 @@ def process_ticker(
         raise RuntimeError(
             f"latest close is {today.date()} ({staleness_days}d old) -- data may be stuck"
         )
+
+    # The baseline for this check lives in `state`, not the (mutable, already
+    # overwritten by the fetch above) price cache file: if the row count were
+    # read from that file, a truncated fetch would both raise *and* become
+    # the new on-disk baseline, so a data source stuck returning the same
+    # truncated history would only ever be caught on the first bad day.
+    # Keeping last-known-good in `state` means it's never overwritten by a
+    # bad fetch -- only by a fetch that passes this very check, below.
+    is_first_run = ticker not in state
+    entry = state.setdefault(
+        ticker, {"notified_event_keys": set(), "last_updated": None, "last_row_count": None}
+    )
+    previous_rows = entry.get("last_row_count")
     if previous_rows is not None and len(close) < previous_rows - ROW_COUNT_DROP_TOLERANCE:
         raise RuntimeError(
             f"row count dropped from {previous_rows} to {len(close)} -- "
             "possible truncated history from the data source"
         )
+    entry["last_row_count"] = len(close)
 
     events = run(close, rolling_high(close), config)
 
     # The very first run for a ticker (or one recovering from a lost state
     # file) would otherwise treat up to WINDOW_DAYS of past history as if it
     # just happened -- e.g. a month-old RECOVERY_CONFIRMED arriving with the
-    # same urgency as today's. Seed it as already-known instead, silently.
-    is_first_run = ticker not in state
-    entry = state.setdefault(ticker, {"notified_event_keys": set(), "last_updated": None})
+    # same urgency as today's. Seed it as already-known instead of notifying
+    # it -- except for anything dated today, which is sent regardless, so a
+    # live event happening on the very day state was lost is never silently
+    # swallowed into history.
     notified_keys = entry["notified_event_keys"]
-
     candidates = select_new_events(events, notified_keys, today)
-    notified, seeded = ([], candidates) if is_first_run else (candidates, [])
-    for event in notified:
-        if not dry_run:
-            notify_event(ticker, event)
+    notified, seeded = [], []
     for event in candidates:
+        if is_first_run and event["date"] != today:
+            seeded.append(event)
+        else:
+            if not dry_run:
+                notify_event(ticker, event)
+            notified.append(event)
+        # Added right after this event is handled (not in a separate pass
+        # over all of `candidates`), so if notify_event raises partway
+        # through, events already sent earlier in this loop are still
+        # recorded -- only the one that failed (and anything after it)
+        # remains unrecorded, to be retried next run.
         notified_keys.add(event_key(event))
 
     status_line = f"{ticker}: {current_status(close, events, config)}"
@@ -126,7 +138,8 @@ def main() -> None:
                 print(f"ERROR  could not send error notification: {notify_exc}", file=sys.stderr)
         sys.exit(1)
 
-    results = []  # (status_line, notified, seeded)
+    results = []  # (status_line, notified, seeded) -- successful tickers, for dry-run detail printing
+    heartbeat_lines = []  # every ticker, success or failure -- see notify_heartbeat below
     today_by_ticker: dict[str, pd.Timestamp] = {}
     had_error = False
 
@@ -135,10 +148,12 @@ def main() -> None:
             status_line, today, notified, seeded = process_ticker(ticker, cfg, state, args.dry_run)
             today_by_ticker[ticker] = today
             results.append((status_line, notified, seeded))
+            heartbeat_lines.append(status_line)
         except Exception as exc:  # noqa: BLE001 -- one ticker's failure must not stop the others
             had_error = True
             message = f"{ticker}: {exc}"
             print(f"ERROR  {message}", file=sys.stderr)
+            heartbeat_lines.append(f"{ticker}: ERROR - {exc}")
             if not args.dry_run:
                 try:
                     notify_error(ticker, message)
@@ -160,7 +175,10 @@ def main() -> None:
     # since today_by_ticker has no entry for a failed ticker) must still be
     # written back rather than silently dropped.
     save_state(state_path, state, today_by_ticker)
-    notify_heartbeat([line for line, _, _ in results])
+    # A failed ticker still gets a line here (not just its own error email):
+    # if the error email itself failed to send (e.g. the same SMTP outage
+    # caused both), the heartbeat is the only message left that can surface it.
+    notify_heartbeat(heartbeat_lines)
     if had_error:
         sys.exit(1)
 
