@@ -43,10 +43,11 @@ recommendations. It monitors predefined rules.
 
 ## Status
 
-Work in progress. The detection logic, backtests, and the daily runner
-(`src/main.py`, email notifications) are done; deploying it to run on a
-schedule is next. See [docs/strategy.md](docs/strategy.md) for the concept
-and [docs/architecture.md](docs/architecture.md) for the system design.
+Work in progress. The detection logic, backtests, the daily runner
+(`src/main.py`, email notifications), and its scheduled deployment (a
+GitHub Actions workflow in the private repo) are implemented. See
+[docs/strategy.md](docs/strategy.md) for the concept and
+[docs/architecture.md](docs/architecture.md) for the system design.
 
 ## Configuration
 
@@ -90,8 +91,8 @@ Drop `--dry-run` to actually send email for new events and a heartbeat (see
 [docs/architecture.md](docs/architecture.md) "Notifications"), and persist
 what's been notified so far to `--state` (default: `data/notified_state.json`).
 Meant to be run once a day, after the US market closes; see
-[docs/architecture.md](docs/architecture.md) "Deployment" for scheduling it
-(not yet decided).
+[docs/architecture.md](docs/architecture.md) "Deployment" for how it's
+scheduled in production (a GitHub Actions workflow in the private repo).
 
 ## Disclaimer
 

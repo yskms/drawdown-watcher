@@ -4,9 +4,10 @@ Recomputes state_machine.run() from scratch over each ticker's full price
 history (see docs/architecture.md "Statelessness and stock splits"), then
 emails only the events not already notified (see src/notification_state.py)
 plus a heartbeat. config/state locations are passed in as plain paths --
-see docs/architecture.md "State (per ticker)" for why the cloud storage
-behind those paths (local file today; maybe S3/SSM once deployed, Phase 4)
-is a separate decision from this runner's logic.
+see docs/architecture.md "State (per ticker)" for why where those paths
+resolve to (a local file in dev; the private repo, committed back after
+each run, in production -- see "Deployment") is a separate decision from
+this runner's logic.
 
 Must only run after the US market has fully closed -- see docs/architecture.md
 "Deployment" (yfinance can return a non-final price for the current day
