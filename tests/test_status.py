@@ -20,7 +20,9 @@ def test_normal_with_no_uptrend_tracking_configured():
 
     events = run(close, _ref(close), config)
 
-    assert current_status(close, events, config) == "NORMAL (no active drawdown episode)"
+    assert current_status(close, events, config) == (
+        f"NORMAL (no active drawdown episode) (as of {close.index[-1].date()})"
+    )
 
 
 def test_normal_but_not_tracking_an_uptrend_when_never_confirmed():
@@ -30,7 +32,8 @@ def test_normal_but_not_tracking_an_uptrend_when_never_confirmed():
     events = run(close, _ref(close), config)
 
     assert current_status(close, events, config) == (
-        "NORMAL (no active drawdown episode) | not tracking an uptrend"
+        f"NORMAL (no active drawdown episode) | not tracking an uptrend "
+        f"(as of {close.index[-1].date()})"
     )
 
 
@@ -58,6 +61,26 @@ def test_uptrend_not_armed_shows_multiple_from_base():
 
     assert "UPTREND (holding to 2.0x)" in status
     assert f"bottom call 84.00 on {close.index[6].date()}" in status
+
+
+def test_triggered_levels_reset_when_a_renewed_decline_relocks():
+    # A RENEWED_DECLINE should start its (sub-)episode with no levels
+    # considered triggered, even though the prior episode already triggered
+    # one of them -- state_machine.py resets triggered_levels on relock.
+    close = _series([100, 100, 79, 65, 90, 90, 95, 74])
+    config = TickerConfig(
+        watch_threshold=-20, levels=[-30, -80], recovery_threshold=10, recovery_confirm_days=2,
+    )
+
+    events = run(close, _ref(close), config)
+    assert [e["event"] for e in events] == [
+        "DRAWDOWN_MODE_ENTER", "LEVEL_TRIGGER", "RECOVERY_CONFIRMED", "RENEWED_DECLINE",
+    ]  # sanity check on the setup: -30 triggers before the relock, not after
+
+    status = current_status(close, events, config)
+
+    assert status.startswith(f"DRAWDOWN MODE since {close.index[7].date()}:")
+    assert "next level -30%" in status  # not "-80%": -30 resets as untriggered after the relock
 
 
 def test_uptrend_armed_shows_peak_and_sell_line():

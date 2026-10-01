@@ -22,23 +22,32 @@ from src.state_machine import TickerConfig
 def current_status(close: pd.Series, events: list[dict], config: TickerConfig) -> str:
     price = close.iloc[-1]
 
+    # Single forward pass, resetting `triggered` exactly when `entry` does,
+    # rather than filtering LEVEL_TRIGGER events by `date >= entry["date"]`.
+    # state_machine.py checks levels against the *old* reference_high before
+    # a same-day RENEWED_DECLINE relocks it, so a LEVEL_TRIGGER can in
+    # principle share its date with the RENEWED_DECLINE that follows it in
+    # the event list -- a date comparison can't tell the two apart, but
+    # position can. (In practice state_machine.py's invariants mean that
+    # exact collision can't carry an untriggered level -- RECOVERY_UNDERCUT
+    # would fire first whenever one could -- but resetting by position is no
+    # more complex than by date, and doesn't depend on that invariant holding.)
     entry = None
+    triggered: set[float] = set()
     for e in events:
         if e["event"] in ("DRAWDOWN_MODE_ENTER", "RENEWED_DECLINE"):
             entry = e
+            triggered = set()
         elif e["event"] == "NORMAL_RESUME":
             entry = None
+        elif e["event"] == "LEVEL_TRIGGER":
+            triggered.add(e["level"])
 
     if entry is None:
         line = "NORMAL (no active drawdown episode)"
     else:
         reference_high = entry["reference_high"]
         drawdown_pct = (price / reference_high - 1) * 100
-        triggered = {
-            e["level"]
-            for e in events
-            if e["event"] == "LEVEL_TRIGGER" and e["date"] >= entry["date"]
-        }
         remaining = [lv for lv in config.levels if lv not in triggered]
         next_level = f"{remaining[0]:.0f}%" if remaining else "none left"
         line = (
@@ -47,7 +56,9 @@ def current_status(close: pd.Series, events: list[dict], config: TickerConfig) -
         )
 
     uptrend_line = _uptrend_status(close, events, config)
-    return f"{line} | {uptrend_line}" if uptrend_line else line
+    if uptrend_line:
+        line = f"{line} | {uptrend_line}"
+    return f"{line} (as of {close.index[-1].date()})"
 
 
 def _uptrend_status(close: pd.Series, events: list[dict], config: TickerConfig) -> str | None:
