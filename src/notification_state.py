@@ -107,7 +107,12 @@ def save_state(
     *suppressed* its next real notification instead of sending it (see
     `main.py`'s `process_ticker`: a ticker absent from `state` is treated as
     never seen before, and seeds rather than notifies). A ticker removed
-    from config lingering here afterward is accepted as the lesser risk.
+    from config lingering here afterward is accepted as the lesser risk --
+    note that this means re-adding a removed ticker later is *not* treated
+    as a first run (its old entry is still present), so if it's been out of
+    config for a while, whatever happened in its last `window_days` arrives
+    as a one-time batch of notifications rather than being seeded quietly.
+    Rare enough in practice not to be worth more than this note.
     """
     raw = {}
     for ticker, entry in state.items():

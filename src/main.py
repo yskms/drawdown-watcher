@@ -70,19 +70,30 @@ def process_ticker(
     # truncated history would only ever be caught on the first bad day.
     # Keeping last-known-good in `state` means it's never overwritten by a
     # bad fetch -- only by a fetch that passes this very check, below.
+    #
+    # Read-only (`.get`, not `state[ticker]` / `setdefault`) until every
+    # check below has passed: creating the entry early would make a ticker
+    # that failed on its very first attempt look like a real "first run" to
+    # the *next* run (ticker present in `state` => not first-run => no
+    # seeding), so a data source hiccup on day one could turn into a
+    # same-size notification backlog once it recovers on day two.
     is_first_run = ticker not in state
-    entry = state.setdefault(
-        ticker, {"notified_event_keys": set(), "last_updated": None, "last_row_count": None}
-    )
-    previous_rows = entry.get("last_row_count")
+    previous_rows = state.get(ticker, {}).get("last_row_count")
     if previous_rows is not None and len(close) < previous_rows - ROW_COUNT_DROP_TOLERANCE:
         raise RuntimeError(
             f"row count dropped from {previous_rows} to {len(close)} -- "
-            "possible truncated history from the data source"
+            "possible truncated history from the data source. If this is "
+            "expected (e.g. the data source legitimately shortened its "
+            "history), clear this ticker's last_row_count in the state file "
+            "to recover."
         )
-    entry["last_row_count"] = len(close)
 
     events = run(close, rolling_high(close), config)
+
+    entry = state.setdefault(
+        ticker, {"notified_event_keys": set(), "last_updated": None, "last_row_count": None}
+    )
+    entry["last_row_count"] = len(close)
 
     # The very first run for a ticker (or one recovering from a lost state
     # file) would otherwise treat up to WINDOW_DAYS of past history as if it

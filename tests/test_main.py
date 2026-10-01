@@ -40,6 +40,35 @@ def test_process_ticker_notifies_new_events_when_not_first_run(monkeypatch):
     assert len(state["SPXL"]["notified_event_keys"]) == 1
 
 
+def test_process_ticker_keeps_keys_for_events_sent_before_a_later_failure(monkeypatch):
+    # Regression guard: keys must be recorded event-by-event, not in a
+    # separate pass after all notify_event calls -- otherwise a failure on
+    # the Nth event of a ticker would also unrecord the first N-1, already
+    # successfully sent, causing them to be re-sent next run too.
+    index = pd.date_range(end=pd.Timestamp.now().normalize(), periods=400, freq="D")
+    prices = [100.0] * 396 + [79.0, 70.0, 65.0, 60.0]  # ENTRY, then a LEVEL_TRIGGER(-30)
+    close = pd.Series(prices, index=index)
+    cfg = {**_CFG, "levels": [-30]}
+    monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: close)
+
+    calls = []
+
+    def flaky_notify_event(ticker, event):
+        calls.append(event)
+        if len(calls) == 2:
+            raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(main_module, "notify_event", flaky_notify_event)
+
+    state = {"SPXL": _state_entry()}  # not first run -- both events go through notify_event
+    with pytest.raises(RuntimeError, match="smtp down"):
+        main_module.process_ticker("SPXL", cfg, state, dry_run=False)
+
+    assert [e["event"] for e in calls] == ["DRAWDOWN_MODE_ENTER", "LEVEL_TRIGGER"]
+    recorded_event_types = {key[1] for key in state["SPXL"]["notified_event_keys"]}
+    assert recorded_event_types == {"DRAWDOWN_MODE_ENTER"}  # the one that failed is not recorded
+
+
 def test_process_ticker_notifies_a_quiet_ticker_after_45_quiet_days(monkeypatch):
     # Regression guard for the bug where an empty-but-known ticker (the
     # normal state for this tool between episodes) got dropped from `state`
