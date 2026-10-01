@@ -264,6 +264,15 @@ def test_refuse_if_market_open_raises_during_regular_hours():
         main_module._refuse_if_market_open(a_thursday_noon)
 
 
+def test_refuse_if_market_open_raises_shortly_after_the_close():
+    # Regression guard: the close itself isn't necessarily final the moment
+    # the bell rings, so the cutoff is a couple of hours past 16:00, not
+    # 16:00 itself -- see docs/architecture.md "Deployment".
+    just_after_close = datetime(2026, 10, 1, 16, 5, tzinfo=ZoneInfo("America/New_York"))
+    with pytest.raises(RuntimeError, match="NYSE hours"):
+        main_module._refuse_if_market_open(just_after_close)
+
+
 def test_refuse_if_market_open_allows_evening():
     a_thursday_evening = datetime(2026, 10, 1, 20, 0, tzinfo=ZoneInfo("America/New_York"))
     main_module._refuse_if_market_open(a_thursday_evening)  # does not raise
@@ -274,9 +283,9 @@ def test_refuse_if_market_open_allows_weekend_even_at_noon():
     main_module._refuse_if_market_open(a_saturday_noon)  # does not raise
 
 
-def test_refuse_if_market_open_is_exclusive_of_the_close():
-    exactly_at_close = datetime(2026, 10, 1, 16, 0, tzinfo=ZoneInfo("America/New_York"))
-    main_module._refuse_if_market_open(exactly_at_close)  # 16:00 itself is already closed
+def test_refuse_if_market_open_is_exclusive_of_the_safe_time():
+    exactly_safe = datetime(2026, 10, 1, 18, 0, tzinfo=ZoneInfo("America/New_York"))
+    main_module._refuse_if_market_open(exactly_safe)  # 18:00 itself is already safe
 
 
 def test_main_refuses_to_run_and_notifies_error_when_market_is_open(monkeypatch, tmp_path):

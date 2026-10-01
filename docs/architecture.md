@@ -183,9 +183,11 @@ not protect against running too early — an event computed from an
 intraday price would be notified and recorded as already-sent, with no
 way to retract it once the real close comes in lower or higher. `src/main.py`
 also refuses a real (non-dry-run) invocation outright during NYSE regular
-hours (`_refuse_if_market_open`), so this doesn't depend solely on the
-scheduler's own timing being correct — it's also what makes a manual
-`workflow_dispatch` run safe regardless of what time it's triggered at.
+hours, and for a couple of hours past the close since the close itself
+isn't necessarily final the moment the bell rings (`_refuse_if_market_open`),
+so this doesn't depend solely on the scheduler's own timing being correct
+— it's also what makes a manual `workflow_dispatch` run safe regardless of
+what time it's triggered at.
 
 Each run checks out this repo fresh (tracking `main`) alongside the
 private repo, which holds the real `--config` and `--state` files,
