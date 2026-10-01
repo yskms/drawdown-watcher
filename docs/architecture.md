@@ -145,22 +145,50 @@ this repo and be passed in with `--config`.
 Sent by email (SMTP; see `.env.example` and `notifier.py`). One per new
 event out of `state_machine.run`, plus:
 
-- Error (data fetch / job failure)
-- Heartbeat (periodic, confirms the system is still alive — expected to
-  otherwise go silent for long stretches, so it's the main defense
-  against a silent failure going unnoticed for years). It also states
-  each ticker's current stage in concrete numbers — in Drawdown Mode, how
-  far down and the next level; while tracking an uptrend, whether it's
-  still in the hold-to-2x stage or armed, the peak and its date, the
-  current distance from it, and the sell line price. The user rarely
-  looks at the market, so "what was I supposed to do?" has to be
-  answerable from the latest message alone.
+- Error (data fetch / job failure — including a stuck or truncated price
+  history: `main.py` rejects a ticker's data as unhealthy if its latest
+  close is more than `STALE_AFTER_DAYS` old, or if its row count drops
+  sharply from the previous run, rather than silently computing events
+  from bad data).
+- Heartbeat (sent every run — currently daily, since nothing yet
+  distinguishes a "quiet" run from a "notify" one — confirms the system is
+  still alive; expected to otherwise go silent for long stretches, so it's
+  the main defense against a silent failure going unnoticed for years). It
+  also states each ticker's current stage in concrete numbers, as of its
+  latest close date — in Drawdown Mode, how far down and the next level;
+  while tracking an uptrend, whether it's still in the hold-to-2x stage or
+  armed, the peak and its date, the current distance from it, and the sell
+  line price. The user rarely looks at the market, so "what was I supposed
+  to do?" has to be answerable from the latest message alone. Whether a
+  daily heartbeat is too chatty (and whether to make that configurable) is
+  open — revisit once Phase 4 scheduling is decided, since the scheduler
+  could just as easily control the frequency from outside `main.py`.
+
+A ticker's very first run (or one recovering from a lost state file) seeds
+whatever's within the notification window as already-known instead of
+emailing it, since none of it just happened today (see
+`src/notification_state.py`, `src/main.py` `process_ticker`).
 
 ## Deployment
 
-A cloud scheduler running once a day (target undecided as of Phase 3 —
-e.g. AWS EventBridge + Lambda, or a scheduled GitHub Actions workflow in
-the private repo). Secrets (SMTP credentials, API keys) are injected via
-environment variables / a secrets manager, never committed — see
-[.env.example](../.env.example). Where `main.py`'s `--config`/`--state`
-paths resolve to (a local file, S3, SSM, …) follows from this choice.
+A cloud scheduler running once a day, **well after the US market closes**
+(target undecided as of Phase 3 — e.g. AWS EventBridge + Lambda, or a
+scheduled GitHub Actions workflow in the private repo). This margin isn't
+optional: during market hours, yfinance can return a non-final price for
+the current day that isn't NaN, so `dropna()` (see "Statelessness and stock
+splits") does not protect against running too early — an event computed
+from an intraday price would be notified and recorded as already-sent,
+with no way to retract it once the real close comes in lower or higher.
+
+Secrets (SMTP credentials, API keys) are injected via environment
+variables / a secrets manager, never committed — see
+[.env.example](../.env.example). Two more things depend on the deployment
+target, beyond secrets:
+
+- Where `main.py`'s `--config`/`--state` paths resolve to (a local file,
+  S3, SSM, …).
+- Where `market_data.py`'s price cache (`data/`) is writable from — it
+  writes on every refresh, which a read-only runtime (e.g. Lambda's
+  deployment package) won't allow; `DATA_DIR` would need to become
+  configurable (e.g. to `/tmp`, which Lambda does provide, non-persistent)
+  rather than the hardcoded repo-relative path it is today.
