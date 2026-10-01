@@ -11,28 +11,13 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
+from src.config import load_config, ticker_config
 from src.drawdown import all_time_high, rolling_high
+from src.event_format import format_event
 from src.market_data import fetch_history
-from src.state_machine import TickerConfig, run
+from src.state_machine import run
 from src.synthetic import synthetic_history
-
-
-def load_config(path: Path) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)["tickers"]
-
-
-def ticker_config(cfg: dict) -> TickerConfig:
-    return TickerConfig(
-        watch_threshold=cfg["watch_threshold"],
-        levels=cfg["levels"],
-        recovery_threshold=cfg["recovery_threshold"],
-        recovery_confirm_days=cfg["recovery_confirm_days"],
-        hold_until_multiple=cfg.get("hold_until_multiple", 2.0),
-        trail_from_peak=cfg.get("trail_from_peak"),
-    )
 
 
 def load_close(ticker: str, refresh: bool = False, synthetic: bool = False) -> pd.Series:
@@ -41,58 +26,6 @@ def load_close(ticker: str, refresh: bool = False, synthetic: bool = False) -> p
     if synthetic:
         return synthetic_history(ticker)
     return fetch_history(ticker, refresh=refresh).dropna()
-
-
-def format_event(e: dict) -> str:
-    date = e["date"].date()
-    if e["event"] == "DRAWDOWN_MODE_ENTER":
-        return (
-            f"{date}  DRAWDOWN MODE ENTER   close={e['close']:.2f}  "
-            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%  "
-            f"streak={e['streak_trading_days']}d"
-        )
-    if e["event"] == "LEVEL_TRIGGER":
-        return (
-            f"{date}  LEVEL {e['level_index']} ({e['level']:.0f}%)     "
-            f"close={e['close']:.2f}  ref_high={e['reference_high']:.2f}  "
-            f"drawdown={e['drawdown_pct']:.1f}%  streak={e['streak_trading_days']}d"
-        )
-    if e["event"] == "RECOVERY_CONFIRMED":
-        return (
-            f"{date}  RECOVERY CONFIRMED    close={e['close']:.2f}  "
-            f"from low={e['lowest_close']:.2f} on {e['lowest_close_date'].date()}  "
-            f"(+{e['recovery_pct']:.1f}%, {e['days_since_low']}d held)"
-        )
-    if e["event"] == "RECOVERY_UNDERCUT":
-        return (
-            f"{date}  RECOVERY UNDERCUT     close={e['close']:.2f}  "
-            f"broke back below confirmed low {e['confirmed_low']:.2f}"
-        )
-    if e["event"] == "RENEWED_DECLINE":
-        return (
-            f"{date}  RENEWED DECLINE       close={e['close']:.2f}  "
-            f"ref_high={e['reference_high']:.2f}  drawdown={e['drawdown_pct']:.1f}%  "
-            f"streak={e['streak_trading_days']}d"
-        )
-    if e["event"] == "UPTREND_ARMED":
-        return (
-            f"{date}  UPTREND ARMED         close={e['close']:.2f}  "
-            f"x{e['multiple']:.1f} from bottom call {e['base_close']:.2f} "
-            f"on {e['base_date'].date()}  sell_line={e['sell_line']:.2f}"
-        )
-    if e["event"] == "UPTREND_EXIT":
-        return (
-            f"{date}  UPTREND EXIT ({e['reason']:<8}) close={e['close']:.2f}  "
-            f"x{e['multiple']:.1f} from bottom call {e['base_close']:.2f}  "
-            f"peak={e['peak']:.2f} on {e['peak_date'].date()}"
-        )
-    if e["event"] == "NORMAL_RESUME":
-        return (
-            f"{date}  NORMAL RESUME         close={e['close']:.2f}  "
-            f"ref_high={e['reference_high']:.2f}  "
-            f"low={e['lowest_close']:.2f} on {e['lowest_close_date'].date()}"
-        )
-    return str(e)
 
 
 def summarize_ticker(ticker: str, close: pd.Series, cfg: dict) -> None:
