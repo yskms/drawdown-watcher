@@ -73,9 +73,9 @@ def process_ticker(
     #
     # Read-only (`.get`, not `state[ticker]` / `setdefault`) until every
     # check below has passed: creating the entry early would make a ticker
-    # that failed on its very first attempt look like a real "first run" to
-    # the *next* run (ticker present in `state` => not first-run => no
-    # seeding), so a data source hiccup on day one could turn into a
+    # that failed on its very first attempt look like an already-seen
+    # ticker to the *next* run (ticker present in `state` => not first-run
+    # => no seeding), so a data source hiccup on day one could turn into a
     # same-size notification backlog once it recovers on day two.
     is_first_run = ticker not in state
     previous_rows = state.get(ticker, {}).get("last_row_count")
