@@ -9,11 +9,18 @@
   残っている場合、翌日に誤って元の高値基準でDRAWDOWN MODEへ再突入する不具合が再発する。
   詳細は[docs/strategy.md](docs/strategy.md)の「Staying alert during a long episode」を参照。
 
-- 本番運用では状態（mode・reference_high等）を保存せず、毎日全期間の価格データで
-  `state_machine.run()`を再計算し、通知済みイベントとの差分だけを通知する方式を採る。
-  レバレッジETFの分割・併合対応、バックテストとの一致、状態の最小化を同時に満たすための
-  意図的な設計。詳細は[docs/architecture.md](docs/architecture.md)の
-  「Statelessness and stock splits」を参照。
+- 本番運用（`src/main.py`）では状態（mode・reference_high等）を保存せず、毎日全期間の
+  価格データで`state_machine.run()`を再計算し、通知済みイベントとの差分だけを通知する
+  （`src/notification_state.py`）。レバレッジETFの分割・併合対応、バックテストとの一致、
+  状態の最小化を同時に満たすための意図的な設計。詳細は
+  [docs/architecture.md](docs/architecture.md)の「Statelessness and stock splits」
+  「State (per ticker)」を参照。
+
+- `src/status.py`（Heartbeatの「今の段階」要約）は`state_machine.py`の内部ループ変数
+  （mode・reference_high等）を公開させる形にせず、`run()`が返すイベント一覧と価格系列
+  から事後的に状態を導出している。state_machine.pyに「最終状態も返すオプション」を
+  足すような変更は、テスト済みの内部実装に手を入れるリスクを増やすだけで得るものが
+  ないため避けること。
 
 - 上昇の追跡（`track_uptrend`）は、「2倍までは何があっても持つ」ように見えるが、
   2倍に届く前に`RECOVERY_UNDERCUT`が出たら降りる（`UPTREND_EXIT`、理由は`undercut`）。

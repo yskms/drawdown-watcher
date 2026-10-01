@@ -42,8 +42,19 @@ low-cost, close-to-zero-maintenance operation, not low latency.
   of that, `track_uptrend` follows each bottom call's rebound
   (UPTREND_ARMED / UPTREND_EXIT) independently of those modes, since a
   worthwhile uptrend runs well past NORMAL_RESUME.
+- `main.py` — the daily production runner: fetches fresh prices, runs the
+  state machine, diffs against `notification_state.py`, and emails new
+  events (see Statelessness and State, below).
+- `notification_state.py` — tracks which events have already been
+  notified, across daily runs (see State, below).
+- `status.py` — derives the heartbeat's per-ticker "current stage"
+  summary from a day's events plus the price series.
+- `event_format.py` — human-readable formatting of an event, shared by
+  `backtest.py` (printed) and `notifier.py` (emailed).
 - `notifier.py` — sends a notification per new event, plus errors and
-  periodic heartbeats.
+  periodic heartbeats, by email (SMTP; see `.env.example`).
+- `config.py` — loads `config/*.yaml` into `TickerConfig`, shared by
+  `backtest.py` and `main.py`.
 - `backtest.py` — runs the state machine against each configured ticker's
   full price history, printing every event it would have fired.
 - `threshold_sweep.py` — a tuning aid: sweeps candidate `watch_threshold`
@@ -87,28 +98,39 @@ hours can end in exactly such a not-yet-final row.
 
 ## State (per ticker)
 
-Only "what's already been notified" needs to persist. **Open design
-question for the start of Phase 3** — a plain count of events seen so far
-(`events_notified_count`, treating `events[count:]` as new) is tempting
-but fragile: changing a ticker's config, or the data source revising or
-extending its history, reshuffles `run()`'s output and silently
-desyncs the count — the exact kind of break that should never happen
-silently on a system meant to run untouched for years. A safer shape to
-decide on before building this: key "already notified" by something
-content-based — e.g. `(date, event_type, level_or_threshold)` — and only
-ever consider events from, say, the last 30 days as notification
-candidates, so a reshuffle further back in history can't resurrect or
-duplicate old notifications.
+Only "what's already been notified" needs to persist (`src/notification_state.py`).
+A plain count of events seen so far (`events_notified_count`, treating
+`events[count:]` as new) would be tempting but fragile: changing a ticker's
+config, or the data source revising or extending its history, reshuffles
+`run()`'s output and silently desyncs the count — the exact kind of break
+that should never happen silently on a system meant to run untouched for
+years. Instead, "already notified" is keyed by something content-based —
+`(date, event_type, detail)`, where `detail` is the level for
+`LEVEL_TRIGGER` (a single-day crash can cross more than one level at once)
+or the reason for `UPTREND_EXIT`, and `None` otherwise — and only events
+within the last 45 days are ever notification candidates. The stored key
+set is pruned to that same window on every save, so a reshuffle further
+back in history can't resurrect or duplicate an old notification, and the
+state file never grows unbounded.
 
 ```text
 ticker
-notified_event_keys    # e.g. {(date, event_type, level), ...}, recent window only
+notified_event_keys    # {(date, event_type, detail), ...}, pruned to the last 45 days
 last_updated
 ```
 
 Either way, everything else (mode, locked reference high, lowest close,
 confirmed low, …) lives only inside that day's `run()` call, derived
-fresh from price history + config — never stored.
+fresh from price history + config — never stored. The one exception is the
+heartbeat's "current stage" summary (`src/status.py`), which re-derives
+mode/drawdown%/uptrend peak from `run()`'s event list plus the price series
+after the fact, rather than exposing the state machine's internal loop
+variables.
+
+This module's config/state are passed in as plain file paths (`--config`,
+`--state`); where those paths actually live — a local file today, S3/SSM
+once deployed — is a Phase 4 (deployment) decision, kept separate from this
+diffing logic.
 
 ## Configuration
 
@@ -120,7 +142,8 @@ this repo and be passed in with `--config`.
 
 ## Notifications
 
-One per new event out of `state_machine.run`, plus:
+Sent by email (SMTP; see `.env.example` and `notifier.py`). One per new
+event out of `state_machine.run`, plus:
 
 - Error (data fetch / job failure)
 - Heartbeat (periodic, confirms the system is still alive — expected to
@@ -135,7 +158,9 @@ One per new event out of `state_machine.run`, plus:
 
 ## Deployment
 
-A cloud scheduler (e.g. AWS EventBridge + Lambda) running once a day.
-Secrets (API keys, webhook URLs, notification tokens) are injected via
+A cloud scheduler running once a day (target undecided as of Phase 3 —
+e.g. AWS EventBridge + Lambda, or a scheduled GitHub Actions workflow in
+the private repo). Secrets (SMTP credentials, API keys) are injected via
 environment variables / a secrets manager, never committed — see
-[.env.example](../.env.example).
+[.env.example](../.env.example). Where `main.py`'s `--config`/`--state`
+paths resolve to (a local file, S3, SSM, …) follows from this choice.

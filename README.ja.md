@@ -41,8 +41,9 @@ NORMAL
 
 ## 状況
 
-開発中です。判定ロジックとバックテストは完成しており、次は本番側（毎日の定期実行と
-通知）です。考え方は[docs/strategy.ja.md](docs/strategy.ja.md)、システム設計は
+開発中です。判定ロジックとバックテスト、日次ランナー（`src/main.py`、メール通知）は
+完成しており、次はそれを定期実行として動かす環境へのデプロイです。考え方は
+[docs/strategy.ja.md](docs/strategy.ja.md)、システム設計は
 [docs/architecture.ja.md](docs/architecture.ja.md)を参照してください。
 
 ## 設定
@@ -73,6 +74,20 @@ python -m pytest tests/
 
 価格履歴は`yfinance`で取得し、`data/`にキャッシュします（gitignore対象で、
 再配布はしません）。
+
+## 実行
+
+```sh
+cp .env.example .env   # SMTPの設定を記入する
+python -m src.main --config ../my-private-config/config.yaml --dry-run
+```
+
+`--dry-run`を外すと、新しいイベントとHeartbeatを実際にメール送信し
+（[docs/architecture.ja.md](docs/architecture.ja.md)の「通知」を参照）、
+ここまで通知済みの内容を`--state`（デフォルト: `data/notified_state.json`）に
+保存します。米国市場の終了後に1日1回実行する想定です。定期実行の仕組みは
+[docs/architecture.ja.md](docs/architecture.ja.md)の「デプロイ」を参照してください
+（まだ未決定です）。
 
 ## 免責事項
 
