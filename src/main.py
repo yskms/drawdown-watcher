@@ -8,6 +8,11 @@ see docs/architecture.md "State (per ticker)" for why the cloud storage
 behind those paths (local file today; maybe S3/SSM once deployed, Phase 4)
 is a separate decision from this runner's logic.
 
+Must only run after the US market has fully closed -- see docs/architecture.md
+"Deployment" (yfinance can return a non-final price for the current day
+while the market is open, and dropna() does not catch that: it's only NaN
+rows, not intraday-and-therefore-not-yet-final ones, that get dropped).
+
 Usage:
     python -m src.main --config ../drawdown-watcher-private/config/config.yaml
 """
@@ -23,28 +28,76 @@ from dotenv import load_dotenv
 
 from src.config import load_config, ticker_config
 from src.drawdown import rolling_high
-from src.market_data import fetch_history
+from src.event_format import format_event
+from src.market_data import cache_path, fetch_history
 from src.notification_state import event_key, load_state, save_state, select_new_events
 from src.notifier import notify_error, notify_event, notify_heartbeat
 from src.state_machine import run
 from src.status import current_status
 
+# A long weekend plus a holiday, with a day of slack -- generous enough to
+# never false-alarm on an ordinary gap, but still catch a data source that's
+# actually stuck (see docs/architecture.md "Notifications": the heartbeat is
+# the main defense against a silent failure, so it has to be able to tell
+# "quiet market" apart from "broken pipe").
+STALE_AFTER_DAYS = 5
+# A couple of trailing rows can legitimately disappear between runs (e.g. a
+# not-yet-final row from yesterday's refresh getting replaced); a bigger drop
+# than that suggests the data source handed back a truncated history.
+ROW_COUNT_DROP_TOLERANCE = 5
 
-def process_ticker(ticker: str, cfg: dict, state: dict, dry_run: bool) -> tuple[str, pd.Timestamp]:
+
+def _cached_row_count(ticker: str) -> int | None:
+    path = cache_path(ticker)
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return sum(1 for _ in f) - 1  # minus header
+
+
+def process_ticker(
+    ticker: str, cfg: dict, state: dict, dry_run: bool
+) -> tuple[str, pd.Timestamp, list[dict], list[dict]]:
     """Notifies new events for one ticker and updates `state` in place.
-    Returns its heartbeat status line and its latest trading date."""
+    Returns (heartbeat status line, latest trading date, events notified or
+    that would be notified this run, events seeded silently -- see below)."""
     config = ticker_config(cfg)
+
+    previous_rows = _cached_row_count(ticker)
     close = fetch_history(ticker, refresh=True).dropna()
-    events = run(close, rolling_high(close), config)
     today = close.index[-1]
 
-    notified_keys = state.setdefault(ticker, set())
-    for event in select_new_events(events, notified_keys, today):
+    staleness_days = (pd.Timestamp.now().normalize() - today).days
+    if staleness_days > STALE_AFTER_DAYS:
+        raise RuntimeError(
+            f"latest close is {today.date()} ({staleness_days}d old) -- data may be stuck"
+        )
+    if previous_rows is not None and len(close) < previous_rows - ROW_COUNT_DROP_TOLERANCE:
+        raise RuntimeError(
+            f"row count dropped from {previous_rows} to {len(close)} -- "
+            "possible truncated history from the data source"
+        )
+
+    events = run(close, rolling_high(close), config)
+
+    # The very first run for a ticker (or one recovering from a lost state
+    # file) would otherwise treat up to WINDOW_DAYS of past history as if it
+    # just happened -- e.g. a month-old RECOVERY_CONFIRMED arriving with the
+    # same urgency as today's. Seed it as already-known instead, silently.
+    is_first_run = ticker not in state
+    entry = state.setdefault(ticker, {"notified_event_keys": set(), "last_updated": None})
+    notified_keys = entry["notified_event_keys"]
+
+    candidates = select_new_events(events, notified_keys, today)
+    notified, seeded = ([], candidates) if is_first_run else (candidates, [])
+    for event in notified:
         if not dry_run:
             notify_event(ticker, event)
+    for event in candidates:
         notified_keys.add(event_key(event))
 
-    return f"{ticker}: {current_status(close, events, config)}", today
+    status_line = f"{ticker}: {current_status(close, events, config)}"
+    return status_line, today, notified, seeded
 
 
 def main() -> None:
@@ -61,19 +114,27 @@ def main() -> None:
 
     config_path = Path(args.config)
     state_path = Path(args.state)
-    tickers_cfg = load_config(config_path)
-    state = load_state(state_path)
+    try:
+        tickers_cfg = load_config(config_path)
+        state = load_state(state_path)
+    except Exception as exc:  # noqa: BLE001 -- a startup failure must still be reported
+        print(f"ERROR  startup: {exc}", file=sys.stderr)
+        if not args.dry_run:
+            try:
+                notify_error(None, f"startup failed: {exc}")
+            except Exception as notify_exc:  # noqa: BLE001
+                print(f"ERROR  could not send error notification: {notify_exc}", file=sys.stderr)
+        sys.exit(1)
 
-    status_lines = []
-    latest_date = None
+    results = []  # (status_line, notified, seeded)
+    today_by_ticker: dict[str, pd.Timestamp] = {}
     had_error = False
 
     for ticker, cfg in tickers_cfg.items():
         try:
-            line, today = process_ticker(ticker, cfg, state, args.dry_run)
-            status_lines.append(line)
-            if latest_date is None or today > latest_date:
-                latest_date = today
+            status_line, today, notified, seeded = process_ticker(ticker, cfg, state, args.dry_run)
+            today_by_ticker[ticker] = today
+            results.append((status_line, notified, seeded))
         except Exception as exc:  # noqa: BLE001 -- one ticker's failure must not stop the others
             had_error = True
             message = f"{ticker}: {exc}"
@@ -85,12 +146,21 @@ def main() -> None:
                     print(f"ERROR  could not send error notification: {notify_exc}", file=sys.stderr)
 
     if args.dry_run:
-        print("\n".join(status_lines))
+        for status_line, notified, seeded in results:
+            print(status_line)
+            for event in notified:
+                print(f"  would notify: {format_event(event, show_streak=False)}")
+            for event in seeded:
+                print(f"  first run, seeding without notifying: {format_event(event, show_streak=False)}")
         return
 
-    if latest_date is not None:
-        save_state(state_path, state, latest_date)
-    notify_heartbeat(status_lines)
+    # Always save -- even a ticker that errored out partway through may have
+    # already sent some of its events this run (see process_ticker), and
+    # even if every ticker failed, whatever's left in `state` (unpruned,
+    # since today_by_ticker has no entry for a failed ticker) must still be
+    # written back rather than silently dropped.
+    save_state(state_path, state, today_by_ticker)
+    notify_heartbeat([line for line, _, _ in results])
     if had_error:
         sys.exit(1)
 
