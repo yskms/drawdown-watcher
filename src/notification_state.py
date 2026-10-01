@@ -23,7 +23,9 @@ import pandas as pd
 WINDOW_DAYS = 45
 
 EventKey = tuple[str, str, float | str | None]
-TickerState = dict  # {"notified_event_keys": set[EventKey], "last_updated": str | None}
+# {"notified_event_keys": set[EventKey], "last_updated": str | None,
+#  "last_row_count": int | None}
+TickerState = dict
 
 
 def event_key(event: dict) -> EventKey:
@@ -61,8 +63,9 @@ def select_new_events(
 
 
 def load_state(path: Path) -> dict[str, TickerState]:
-    """{ticker: {"notified_event_keys": set, "last_updated": str | None}}.
-    Missing file means no state yet (first run for every ticker)."""
+    """{ticker: {"notified_event_keys": set, "last_updated": str | None,
+    "last_row_count": int | None}}. Missing file means no ticker has ever
+    been seen (first run for every ticker -- see `main.py`'s `process_ticker`)."""
     if not path.exists():
         return {}
     with open(path) as f:
@@ -71,6 +74,7 @@ def load_state(path: Path) -> dict[str, TickerState]:
         ticker: {
             "notified_event_keys": {tuple(key) for key in entry["notified_event_keys"]},
             "last_updated": entry.get("last_updated"),
+            "last_row_count": entry.get("last_row_count"),
         }
         for ticker, entry in raw.items()
     }
@@ -96,9 +100,14 @@ def save_state(
     never lost just because a *different* ticker failed (see `main.py`,
     which always calls this once per run regardless of per-ticker errors).
 
-    A ticker whose keys are empty after pruning is dropped entirely, so a
-    ticker removed from config -- or one simply quiet for `window_days` --
-    doesn't linger in the file forever.
+    Every ticker ever seen is kept, even with an empty key set (a ticker
+    quiet for `window_days` is the normal case for this tool) -- dropping
+    empty entries previously meant a quiet ticker vanished from `state` and
+    came back as a false "first run" on the very next day, which silently
+    *suppressed* its next real notification instead of sending it (see
+    `main.py`'s `process_ticker`: a ticker absent from `state` is treated as
+    never seen before, and seeds rather than notifies). A ticker removed
+    from config lingering here afterward is accepted as the lesser risk.
     """
     raw = {}
     for ticker, entry in state.items():
@@ -110,9 +119,11 @@ def save_state(
             cutoff = (today - pd.Timedelta(days=window_days)).date().isoformat()
             kept = {key for key in entry["notified_event_keys"] if key[0] >= cutoff}
             last_updated = today.isoformat()
-        if not kept:
-            continue
-        raw[ticker] = {"notified_event_keys": sorted(kept), "last_updated": last_updated}
+        raw[ticker] = {
+            "notified_event_keys": sorted(kept),
+            "last_updated": last_updated,
+            "last_row_count": entry.get("last_row_count"),
+        }
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:

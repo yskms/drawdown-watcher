@@ -7,8 +7,8 @@ def _event(date: str, event: str, **extra) -> dict:
     return {"date": pd.Timestamp(date), "event": event, **extra}
 
 
-def _entry(keys: set) -> dict:
-    return {"notified_event_keys": keys, "last_updated": None}
+def _entry(keys: set, last_row_count: int | None = None) -> dict:
+    return {"notified_event_keys": keys, "last_updated": None, "last_row_count": last_row_count}
 
 
 def test_event_key_disambiguates_same_day_level_triggers():
@@ -103,7 +103,13 @@ def test_save_state_keeps_ticker_unpruned_when_missing_from_today_by_ticker(tmp_
     assert loaded["SPXL"]["last_updated"] == "2026-01-01T00:00:00"
 
 
-def test_save_state_drops_ticker_with_no_keys_left(tmp_path):
+def test_save_state_keeps_ticker_with_no_keys_left(tmp_path):
+    # Regression guard: an earlier version dropped a ticker entirely once its
+    # key set emptied out (e.g. a quiet ticker, pruned past the window --
+    # the normal case for this tool). That made the ticker vanish from
+    # `state`, which `main.py`'s `process_ticker` reads as "never seen
+    # before" -- so every quiet ticker's *next* real event was silently
+    # seeded instead of notified, forever. See `save_state`.
     path = tmp_path / "state.json"
     today = pd.Timestamp("2026-03-10")
     old_key = {("2026-01-01", "DRAWDOWN_MODE_ENTER", None)}
@@ -111,7 +117,18 @@ def test_save_state_drops_ticker_with_no_keys_left(tmp_path):
     save_state(path, {"SPXL": _entry(old_key)}, {"SPXL": today}, window_days=45)
     loaded = load_state(path)
 
-    assert "SPXL" not in loaded
+    assert "SPXL" in loaded
+    assert loaded["SPXL"]["notified_event_keys"] == set()
+
+
+def test_save_and_load_state_roundtrip_last_row_count(tmp_path):
+    path = tmp_path / "state.json"
+    today = pd.Timestamp("2026-03-10")
+
+    save_state(path, {"SPXL": _entry(set(), last_row_count=4500)}, {"SPXL": today})
+    loaded = load_state(path)
+
+    assert loaded["SPXL"]["last_row_count"] == 4500
 
 
 def test_load_state_missing_file_returns_empty(tmp_path):
