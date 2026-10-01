@@ -15,3 +15,6 @@ data/
 
 # Claude Code personal settings (local paths, permissions)
 .claude/settings.local.json
+
+# Unpublished drafts (e.g. Zenn articles)
+docs/private/
