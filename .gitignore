@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Market data (not redistributable — fetch locally instead)
+data/
+
+# OS
+.DS_Store

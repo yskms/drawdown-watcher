@@ -1,0 +1,25 @@
+# Illustrative values only — not recommendations.
+#
+# How deep to set these depends on the ticker's volatility and on how often
+# you want to be notified. Tune them against history with
+# `python -m src.threshold_sweep <TICKER>` and keep your real config outside
+# this repo, passing it with `--config <path>`.
+
+tickers:
+  SPXL:
+    watch_threshold: -30
+    levels:
+      - -40
+      - -50
+      - -60
+    recovery_threshold: 15
+    recovery_confirm_days: 10
+
+  VOO:
+    watch_threshold: -10
+    levels:
+      - -15
+      - -20
+      - -25
+    recovery_threshold: 15
+    recovery_confirm_days: 10
