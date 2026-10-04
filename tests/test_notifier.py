@@ -43,10 +43,11 @@ def test_notify_event_sends_email_with_ticker_and_event_details(mock_smtp, monke
     smtp_instance.login.assert_called_once_with("user@example.com", "secret")
     sent = smtp_instance.send_message.call_args[0][0]
     assert sent["To"] == "me@example.com"
-    assert "SPXL" in sent["Subject"]
-    assert "DRAWDOWN_MODE_ENTER" in sent["Subject"]
-    assert "DRAWDOWN MODE ENTER" in sent.get_content()
-    assert "streak=" not in sent.get_content()  # always 1d in production -- see event_format.py
+    assert sent["Subject"] == "[Drawdown Watcher] SPXL: 下落局面に入りました"
+    body = sent.get_content()
+    assert "下落局面に入りました" in body
+    assert "73.00" in body and "100.00" in body and "-27.0%" in body
+    assert "streak" not in body  # always 1d in production -- see event_format.py
 
 
 @patch("src.notifier.smtplib.SMTP")
@@ -69,8 +70,7 @@ def test_notify_error_sends_email(mock_smtp, monkeypatch):
     notify_error("VOO", "fetch failed")
 
     sent = smtp_instance.send_message.call_args[0][0]
-    assert "ERROR" in sent["Subject"]
-    assert "VOO" in sent["Subject"]
+    assert sent["Subject"] == "[Drawdown Watcher] エラー (VOO)"
     assert "fetch failed" in sent.get_content()
 
 
@@ -79,11 +79,12 @@ def test_notify_heartbeat_joins_status_lines(mock_smtp, monkeypatch):
     _set_smtp_env(monkeypatch)
     smtp_instance = mock_smtp.return_value.__enter__.return_value
 
-    notify_heartbeat(["SPXL: NORMAL", "VOO: NORMAL"])
+    notify_heartbeat(["SPXL\n現在: 平常", "VOO\n現在: 平常"])
 
     sent = smtp_instance.send_message.call_args[0][0]
-    assert "SPXL: NORMAL" in sent.get_content()
-    assert "VOO: NORMAL" in sent.get_content()
+    assert "heartbeat" in sent["Subject"]
+    # each ticker is a multi-line block, so blocks are separated by a blank line
+    assert "SPXL\n現在: 平常\n\nVOO\n現在: 平常" in sent.get_content()
 
 
 @patch("src.notifier.smtplib.SMTP")
@@ -129,3 +130,18 @@ def test_empty_from_address_falls_back_to_username(mock_smtp, monkeypatch):
 
     sent = smtp_instance.send_message.call_args[0][0]
     assert sent["From"] == "user@example.com"
+
+
+@patch("src.notifier.smtplib.SMTP")
+def test_japanese_message_is_sent_as_7bit_safe_utf8(mock_smtp, monkeypatch):
+    # smtplib.send_message doesn't declare BODY=8BITMIME, so the body must
+    # not go out as raw 8-bit UTF-8 (the EmailMessage default for non-ASCII).
+    _set_smtp_env(monkeypatch)
+    smtp_instance = mock_smtp.return_value.__enter__.return_value
+
+    notify_heartbeat(["SOXL\n現在: 底打ち確認済み"])
+
+    sent = smtp_instance.send_message.call_args[0][0]
+    assert sent["Content-Transfer-Encoding"] == "base64"
+    assert all(byte < 128 for byte in sent.as_bytes())
+    assert "現在: 底打ち確認済み" in sent.get_content()

@@ -77,8 +77,8 @@ def _refuse_if_market_open(now: datetime | None = None) -> None:
     now = now or datetime.now(ZoneInfo("America/New_York"))
     if now.weekday() < 5 and _NYSE_OPEN <= now.time() < _SAFE_TO_RUN_FROM:
         raise RuntimeError(
-            f"refusing to run this close to NYSE hours ({now.strftime('%H:%M %Z')}) -- "
-            'see docs/architecture.md "Deployment"'
+            f"NYSEの取引時間中、または引け直後のため実行を拒否しました（現在 {now.strftime('%H:%M %Z')}）。"
+            'docs/architecture.md「Deployment」を参照'
         )
 
 
@@ -95,7 +95,7 @@ def process_ticker(
     staleness_days = (pd.Timestamp.now().normalize() - today).days
     if staleness_days > STALE_AFTER_DAYS:
         raise RuntimeError(
-            f"latest close is {today.date()} ({staleness_days}d old) -- data may be stuck"
+            f"最新の終値が {today.date()}（{staleness_days}日前）のままです。データ取得が止まっている可能性があります"
         )
 
     # The baseline for this check lives in `state`, not the (mutable, already
@@ -116,11 +116,10 @@ def process_ticker(
     previous_rows = state.get(ticker, {}).get("last_row_count")
     if previous_rows is not None and len(close) < previous_rows - ROW_COUNT_DROP_TOLERANCE:
         raise RuntimeError(
-            f"row count dropped from {previous_rows} to {len(close)} -- "
-            "possible truncated history from the data source. If this is "
-            "expected (e.g. the data source legitimately shortened its "
-            "history), clear this ticker's last_row_count in the state file "
-            "to recover."
+            f"価格データの行数が {previous_rows} から {len(close)} に減りました。"
+            "データ取得元が履歴を途中で切って返した可能性があります。"
+            "意図した変更（取得元が履歴を短縮した等）であれば、stateファイルの"
+            "この銘柄の last_row_count を消すと復旧します。"
         )
 
     events = run(close, rolling_high(close), config)
@@ -154,7 +153,7 @@ def process_ticker(
         # remains unrecorded, to be retried next run.
         notified_keys.add(event_key(event))
 
-    status_line = f"{ticker}: {current_status(close, events, config)}"
+    status_line = f"{ticker}（{today.date()}の終値時点）\n{current_status(close, events, config)}"
     return status_line, today, notified, seeded
 
 
@@ -181,7 +180,7 @@ def main() -> None:
         print(f"ERROR  startup: {exc}", file=sys.stderr)
         if not args.dry_run:
             try:
-                notify_error(None, f"startup failed: {exc}")
+                notify_error(None, f"起動時にエラーが発生しました: {exc}")
             except Exception as notify_exc:  # noqa: BLE001
                 print(f"ERROR  could not send error notification: {notify_exc}", file=sys.stderr)
         sys.exit(1)
@@ -201,7 +200,7 @@ def main() -> None:
             had_error = True
             message = f"{ticker}: {exc}"
             print(f"ERROR  {message}", file=sys.stderr)
-            heartbeat_lines.append(f"{ticker}: ERROR - {exc}")
+            heartbeat_lines.append(f"{ticker}: エラー - {exc}")
             if not args.dry_run:
                 try:
                     notify_error(ticker, message)

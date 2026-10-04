@@ -39,6 +39,7 @@ def test_process_ticker_notifies_new_events_when_not_first_run(monkeypatch):
     assert seeded == []
     assert len(notified_calls) == 1
     assert today == close.index[-1]
+    assert status_line.startswith(f"SPXL（{today.date()}の終値時点）\n現在: ")
     assert len(state["SPXL"]["notified_event_keys"]) == 1
 
 
@@ -142,7 +143,7 @@ def test_process_ticker_raises_on_stale_data(monkeypatch):
     stale_close = _close_series(last_price=100.0, end=pd.Timestamp.now().normalize() - pd.Timedelta(days=30))
     monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: stale_close)
 
-    with pytest.raises(RuntimeError, match="data may be stuck"):
+    with pytest.raises(RuntimeError, match="データ取得が止まっている可能性"):
         main_module.process_ticker("SPXL", _CFG, {}, dry_run=False)
 
 
@@ -151,7 +152,7 @@ def test_process_ticker_raises_on_row_count_drop(monkeypatch):
     monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: close)
     state = {"SPXL": _state_entry(last_row_count=1000)}  # was 1000, now 400
 
-    with pytest.raises(RuntimeError, match="row count dropped"):
+    with pytest.raises(RuntimeError, match="行数が .* に減りました"):
         main_module.process_ticker("SPXL", _CFG, state, dry_run=False)
 
 
@@ -165,11 +166,11 @@ def test_process_ticker_keeps_last_known_good_row_count_after_a_bad_fetch(monkey
     bad_close = _close_series(last_price=100.0, days=400)
     monkeypatch.setattr(main_module, "fetch_history", lambda ticker, refresh: bad_close)
 
-    with pytest.raises(RuntimeError, match="row count dropped"):
+    with pytest.raises(RuntimeError, match="行数が .* に減りました"):
         main_module.process_ticker("SPXL", _CFG, state, dry_run=False)
     assert state["SPXL"]["last_row_count"] == 1000  # unchanged -- the bad fetch never overwrote it
 
-    with pytest.raises(RuntimeError, match="row count dropped"):
+    with pytest.raises(RuntimeError, match="行数が .* に減りました"):
         main_module.process_ticker("SPXL", _CFG, state, dry_run=False)  # still caught, a second time
 
 
@@ -203,7 +204,7 @@ def test_main_saves_state_even_when_every_ticker_fails(tmp_path, monkeypatch):
     assert error_calls == [("SPXL", "SPXL: network down")]
     # Still sent (not skipped), and the failure shows up here too -- in case
     # the same outage that broke the fetch also breaks the error email above.
-    assert heartbeat_calls == [["SPXL: ERROR - network down"]]
+    assert heartbeat_calls == [["SPXL: エラー - network down"]]
 
     saved = real_load_state(state_path)
     assert saved["SPXL"]["notified_event_keys"] == {("2026-01-01", "DRAWDOWN_MODE_ENTER", None)}
@@ -260,7 +261,7 @@ def test_main_notifies_error_on_startup_failure(monkeypatch, tmp_path):
 
 def test_refuse_if_market_open_raises_during_regular_hours():
     a_thursday_noon = datetime(2026, 10, 1, 12, 0, tzinfo=ZoneInfo("America/New_York"))
-    with pytest.raises(RuntimeError, match="NYSE hours"):
+    with pytest.raises(RuntimeError, match="NYSE"):
         main_module._refuse_if_market_open(a_thursday_noon)
 
 
@@ -269,7 +270,7 @@ def test_refuse_if_market_open_raises_shortly_after_the_close():
     # the bell rings, so the cutoff is a couple of hours past 16:00, not
     # 16:00 itself -- see docs/architecture.md "Deployment".
     just_after_close = datetime(2026, 10, 1, 16, 5, tzinfo=ZoneInfo("America/New_York"))
-    with pytest.raises(RuntimeError, match="NYSE hours"):
+    with pytest.raises(RuntimeError, match="NYSE"):
         main_module._refuse_if_market_open(just_after_close)
 
 
@@ -292,7 +293,7 @@ def test_main_refuses_to_run_and_notifies_error_when_market_is_open(monkeypatch,
     monkeypatch.setattr(main_module, "load_config", lambda path: {"SPXL": _CFG})
     monkeypatch.setattr(
         main_module, "_refuse_if_market_open",
-        lambda: (_ for _ in ()).throw(RuntimeError("refusing to run during NYSE hours (12:00 EDT)")),
+        lambda: (_ for _ in ()).throw(RuntimeError("NYSEの取引時間中のため実行を拒否しました（12:00 EDT）")),
     )
     error_calls = []
     monkeypatch.setattr(main_module, "notify_error", lambda ticker, msg: error_calls.append((ticker, msg)))
@@ -304,7 +305,8 @@ def test_main_refuses_to_run_and_notifies_error_when_market_is_open(monkeypatch,
     assert exc_info.value.code == 1
     assert len(error_calls) == 1
     assert error_calls[0][0] is None
-    assert "NYSE hours" in error_calls[0][1]
+    assert "NYSE" in error_calls[0][1]
+    assert error_calls[0][1].startswith("起動時にエラーが発生しました: ")
 
 
 def test_main_dry_run_never_checks_market_hours(monkeypatch, tmp_path):

@@ -29,6 +29,13 @@
   この問題が表に出ないため、必ず`--synthetic`でも確認する。詳細は
   [docs/strategy.md](docs/strategy.md)の「After the bottom」を参照。
 
+- `src/event_format.py`には整形関数が2系統ある。`format_event`（英語・固定幅）は
+  バックテストの表示用、`event_title_ja`/`format_event_ja`（日本語）はメール用。
+  重複に見えても統合しないこと。メールの文面（件名・本文・`main.py`が投げる
+  エラーメッセージ）は日本語、バックテスト出力は英語、という使い分けが前提。
+  件名の`[Drawdown Watcher]`はメールのフィルタ用にASCIIのまま維持する。
+  詳細は[docs/architecture.md](docs/architecture.md)の「Notifications」を参照。
+
 ## 公開範囲
 
 - このリポジトリはpublic。実際に運用する銘柄別の閾値・その調整根拠（バックテストで得た

@@ -1,5 +1,10 @@
 """Sends drawdown/recovery/error/heartbeat notifications by email (SMTP).
 
+Subjects and bodies are in Japanese -- the one reader is Japanese, and these
+are the only messages the system ever sends (see src/event_format.py for why
+the backtest keeps its own English formatter). The "[Drawdown Watcher]"
+subject prefix stays ASCII so mail filters/labels keyed on it keep working.
+
 Credentials and the recipient address come from the environment (see
 .env.example), never from config -- config is meant to be shareable
 (config/config.example.yaml ships in the public repo), secrets aren't.
@@ -15,7 +20,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
-from src.event_format import format_event
+from src.event_format import event_title_ja, format_event_ja
 
 SMTP_TIMEOUT_SECONDS = 30
 
@@ -49,7 +54,10 @@ def _send_email(subject: str, body: str) -> None:
     message["Subject"] = subject
     message["From"] = from_addr
     message["To"] = to_addr
-    message.set_content(body)
+    # base64, not the default 8bit: smtplib.send_message doesn't declare
+    # BODY=8BITMIME, so a raw UTF-8 Japanese body would be sent as 8-bit data
+    # a non-8BITMIME server may mangle. base64 is 7-bit clean everywhere.
+    message.set_content(body, cte="base64")
 
     with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
         smtp.starttls(context=ssl.create_default_context())
@@ -59,15 +67,16 @@ def _send_email(subject: str, body: str) -> None:
 
 
 def notify_event(ticker: str, event: dict) -> None:
-    subject = f"[Drawdown Watcher] {ticker}: {event['event']}"
-    _send_email(subject, f"{ticker}\n\n{format_event(event, show_streak=False)}")
+    title = event_title_ja(event)
+    _send_email(f"[Drawdown Watcher] {ticker}: {title}", f"{ticker}: {title}\n\n{format_event_ja(event)}")
 
 
 def notify_error(ticker: str | None, message: str) -> None:
-    subject = f"[Drawdown Watcher] ERROR{f' ({ticker})' if ticker else ''}"
+    subject = f"[Drawdown Watcher] エラー{f' ({ticker})' if ticker else ''}"
     _send_email(subject, message)
 
 
 def notify_heartbeat(status_lines: list[str]) -> None:
-    subject = "[Drawdown Watcher] heartbeat"
-    _send_email(subject, "\n".join(status_lines))
+    subject = "[Drawdown Watcher] heartbeat（現在の状況）"
+    # Blank line between tickers: each status is a multi-line block.
+    _send_email(subject, "\n\n".join(status_lines))

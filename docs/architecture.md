@@ -49,8 +49,10 @@ low-cost, close-to-zero-maintenance operation, not low latency.
   notified, across daily runs (see State, below).
 - `status.py` — derives the heartbeat's per-ticker "current stage"
   summary from a day's events plus the price series.
-- `event_format.py` — human-readable formatting of an event, shared by
-  `backtest.py` (printed) and `notifier.py` (emailed).
+- `event_format.py` — human-readable formatting of an event: `format_event`
+  (English, fixed-width) for `backtest.py`'s printed output, and
+  `event_title_ja`/`format_event_ja` (Japanese prose) for `notifier.py`'s
+  emails. Two formatters on purpose; see Notifications.
 - `notifier.py` — sends a notification per new event, plus errors and
   periodic heartbeats, by email (SMTP; see `.env.example`).
 - `config.py` — loads `config/*.yaml` into `TickerConfig`, shared by
@@ -163,6 +165,21 @@ event out of `state_machine.run`, plus:
   daily heartbeat is too chatty (and whether to make that configurable) is
   open — revisit once Phase 4 scheduling is decided, since the scheduler
   could just as easily control the frequency from outside `main.py`.
+
+All email text (subjects and bodies, including the error messages
+`main.py` raises itself) is Japanese; the backtest's printed output stays
+English. That is why `event_format.py` has two formatters — don't merge
+them. The `[Drawdown Watcher]` subject prefix stays ASCII so mail filters
+keyed on it keep working.
+
+Each ticker's heartbeat block opens with one line naming its stage ("bottom
+confirmed; following the uptrend, hold until 2.0x"), and the numbers follow
+indented. The headline names both halves because the drawdown episode and
+the uptrend tracking are independent in the engine: after a crash, the
+episode usually stays open (the old high isn't regained) long after the
+bottom is confirmed and the rebound is being followed. A line that said only
+"Drawdown Mode since <date>" read as "still falling" even when the price had
+been climbing since that day.
 
 A ticker's very first run (identified by its absence from `state` --
 *never* by an empty key set, which is the ordinary case for a quiet ticker
