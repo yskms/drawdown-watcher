@@ -39,7 +39,7 @@ def test_process_ticker_notifies_new_events_when_not_first_run(monkeypatch):
     assert seeded == []
     assert len(notified_calls) == 1
     assert today == close.index[-1]
-    assert status_line.startswith(f"SPXL（{today.date()}の終値時点）\n現在: ")
+    assert status_line.startswith(f"SPXL 終値 79.00（{today.date()}）\n現在: ")
     assert len(state["SPXL"]["notified_event_keys"]) == 1
 
 

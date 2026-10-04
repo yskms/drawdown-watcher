@@ -153,7 +153,7 @@ def process_ticker(
         # remains unrecorded, to be retried next run.
         notified_keys.add(event_key(event))
 
-    status_line = f"{ticker}（{today.date()}の終値時点）\n{current_status(close, events, config)}"
+    status_line = f"{ticker} 終値 {close.iloc[-1]:.2f}（{today.date()}）\n{current_status(close, events, config)}"
     return status_line, today, notified, seeded
 
 
