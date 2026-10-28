@@ -33,6 +33,7 @@ RATE_TICKER = "^IRX"
 UNDERLYING = {
     "SPXL": ("^GSPC", 3, 0.0091),
     "TECL": ("^NDX", 3, 0.0085),
+    "TQQQ": ("^NDX", 3, 0.0084),
     "SOXL": ("^SOX", 3, 0.0075),
     "VOO": ("^GSPC", 1, 0.0003),
 }
