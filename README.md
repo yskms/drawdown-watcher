@@ -7,7 +7,7 @@ predefined thresholds are reached.
 
 Drawdown Watcher tracks the 52-week closing high of each ticker. When a
 configured drawdown threshold is reached, it locks the reference high and
-monitors deeper drawdown levels and a confirmed recovery off the low —
+monitors deeper drawdown levels and a confirmed recovery off the low -
 then follows the rebound, so a good entry isn't sold too early. It's
 built for someone who doesn't watch the market day to day, so it only
 speaks up at a few points:
@@ -54,7 +54,7 @@ GitHub Actions workflow in the private repo) are implemented. See
 Watch thresholds, drawdown levels, and recovery thresholds are configurable
 per ticker, since volatility differs a lot between, say, a 3x leveraged ETF
 and a broad index fund. See
-[config/config.example.yaml](config/config.example.yaml) for the format —
+[config/config.example.yaml](config/config.example.yaml) for the format -
 its values are illustrative, not recommendations. Tune your own with
 `python -m src.threshold_sweep <TICKER>` and `python -m src.exit_sweep
 <TICKER>` (add `--synthetic` to test against decades of synthetic history
@@ -78,7 +78,7 @@ python -m pytest tests/
 ```
 
 Price history is fetched via `yfinance` and cached under `data/`
-(gitignored — not redistributed).
+(gitignored - not redistributed).
 
 ## Running it
 
